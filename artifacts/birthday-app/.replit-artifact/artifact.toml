@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "Birthday AI Gift App"
+version = "1.0.0"
+id = "artifacts/birthday-app"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+localPort = 24942
+name = "expo"
+paths = ["/"]
+
+[services.development]
+run = "pnpm --filter @workspace/birthday-app run dev"
+
+[services.env]
+PORT = "24942"
+BASE_PATH = "/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/birthday-app", "run", "build"]
+run = ["pnpm", "--filter", "@workspace/birthday-app", "run", "serve"]
