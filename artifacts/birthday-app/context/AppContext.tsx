@@ -14,6 +14,7 @@ interface AppContextValue {
   isUnlocked: boolean;
   introSeen: boolean;
   markIntroSeen: () => Promise<void>;
+  resetIntro: () => Promise<void>;
   timeLeft: { days: number; hours: number; minutes: number; seconds: number };
 }
 
@@ -51,14 +52,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIntroSeen(true);
   }, []);
 
+  const resetIntro = useCallback(async () => {
+    await AsyncStorage.removeItem(INTRO_SEEN_KEY);
+    setIntroSeen(false);
+  }, []);
+
   const value = useMemo(
     () => ({
       isUnlocked,
       introSeen,
       markIntroSeen,
+      resetIntro,
       timeLeft: { days, hours, minutes, seconds },
     }),
-    [isUnlocked, introSeen, markIntroSeen, days, hours, minutes, seconds]
+    [isUnlocked, introSeen, markIntroSeen, resetIntro, days, hours, minutes, seconds]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

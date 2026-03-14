@@ -1,6 +1,6 @@
 kind = "mobile"
 previewPath = "/"
-title = "Birthday AI Gift App"
+title = "DOHA.ai"
 version = "1.0.0"
 id = "artifacts/birthday-app"
 router = "expo-domain"

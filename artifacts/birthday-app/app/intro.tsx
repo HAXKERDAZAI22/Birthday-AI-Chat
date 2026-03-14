@@ -1,4 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useRef, useState } from "react";
@@ -16,7 +18,7 @@ import { BIRTHDAY_LETTER } from "@/config";
 import COLORS from "@/constants/colors";
 import { useApp } from "@/context/AppContext";
 
-type IntroStep = "image" | "letter" | "done";
+type IntroStep = "image" | "video" | "letter";
 
 export default function IntroScreen() {
   const { markIntroSeen } = useApp();
@@ -38,7 +40,7 @@ export default function IntroScreen() {
         router.replace("/chat");
         return;
       }
-      setStep(next);
+      setStep(next as IntroStep);
       Animated.timing(fadeAnim, {
         toValue: 1,
         duration: 600,
@@ -53,7 +55,8 @@ export default function IntroScreen() {
       style={[styles.container, { paddingTop: topInset, paddingBottom: botInset }]}
     >
       <Animated.View style={[styles.inner, { opacity: fadeAnim }]}>
-        {step === "image" && <ImageStep onNext={() => transition("letter")} />}
+        {step === "image" && <ImageStep onNext={() => transition("video")} />}
+        {step === "video" && <VideoStep onNext={() => transition("letter")} />}
         {step === "letter" && <LetterStep onNext={() => transition("chat")} />}
       </Animated.View>
     </LinearGradient>
@@ -64,24 +67,17 @@ function ImageStep({ onNext }: { onNext: () => void }) {
   return (
     <View style={styles.stepContainer}>
       <View style={styles.imageSection}>
-        <View style={styles.imagePlaceholder}>
+        <View style={styles.imageShadow}>
+          <Image
+            source={require("@/assets/images/intro.jpg")}
+            style={styles.introImage}
+            contentFit="cover"
+          />
           <LinearGradient
-            colors={["#2A1545", "#1A0D2E", "#0D1A3E"]}
-            style={styles.imageGradient}
-          >
-            <View style={styles.heartOuter}>
-              <View style={styles.heartInner}>
-                <Ionicons name="heart" size={56} color={COLORS.accent} />
-              </View>
-            </View>
-            <View style={styles.sparkleRow}>
-              {[...Array(5)].map((_, i) => (
-                <Ionicons key={i} name="sparkles" size={12} color={COLORS.accentGold} style={{ opacity: 0.6 + i * 0.08 }} />
-              ))}
-            </View>
-          </LinearGradient>
+            colors={["transparent", `${COLORS.bgDeep}CC`, COLORS.bgDeep]}
+            style={styles.imageOverlay}
+          />
         </View>
-
         <View style={styles.welcomeText}>
           <Text style={styles.welcomeTitle}>A Gift Just For You</Text>
           <Text style={styles.welcomeSub}>
@@ -103,7 +99,53 @@ function ImageStep({ onNext }: { onNext: () => void }) {
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
         >
-          <Text style={styles.btnText}>Open Your Gift</Text>
+          <Text style={styles.btnText}>Next</Text>
+          <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
+        </LinearGradient>
+      </Pressable>
+    </View>
+  );
+}
+
+function VideoStep({ onNext }: { onNext: () => void }) {
+  const player = useVideoPlayer(
+    require("@/assets/videos/intro.mp4"),
+    (p) => {
+      p.play();
+    }
+  );
+
+  return (
+    <View style={styles.stepContainer}>
+      <View style={styles.videoSection}>
+        <View style={styles.videoWrapper}>
+          <VideoView
+            player={player}
+            style={styles.video}
+            contentFit="cover"
+            nativeControls={false}
+          />
+          <LinearGradient
+            colors={["transparent", `${COLORS.bgDeep}88`, COLORS.bgDeep]}
+            style={styles.videoOverlay}
+          />
+        </View>
+      </View>
+
+      <Pressable
+        onPress={onNext}
+        style={({ pressed }) => [
+          styles.nextBtn,
+          { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
+        ]}
+      >
+        <LinearGradient
+          colors={[COLORS.accent, COLORS.accentSoft]}
+          style={styles.btnGradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+        >
+          <Text style={styles.btnText}>Next</Text>
           <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
         </LinearGradient>
       </Pressable>
@@ -118,7 +160,7 @@ function LetterStep({ onNext }: { onNext: () => void }) {
         <View style={styles.envelopeIcon}>
           <Ionicons name="mail-open" size={28} color={COLORS.accentGold} />
         </View>
-        <Text style={styles.letterTitle}>A Letter For You</Text>
+        <Text style={styles.letterTitle}>رسالة إليكِ</Text>
       </View>
 
       <ScrollView
@@ -148,7 +190,7 @@ function LetterStep({ onNext }: { onNext: () => void }) {
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
         >
-          <Text style={styles.btnText}>Continue</Text>
+          <Text style={styles.btnText}>ابدأي المغامرة</Text>
           <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
         </LinearGradient>
       </Pressable>
@@ -157,12 +199,8 @@ function LetterStep({ onNext }: { onNext: () => void }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  inner: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  inner: { flex: 1 },
   stepContainer: {
     flex: 1,
     paddingHorizontal: 24,
@@ -174,12 +212,12 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 32,
+    gap: 28,
   },
-  imagePlaceholder: {
-    width: 260,
-    height: 260,
-    borderRadius: 32,
+  imageShadow: {
+    width: 280,
+    height: 280,
+    borderRadius: 28,
     overflow: "hidden",
     shadowColor: COLORS.accent,
     shadowOffset: { width: 0, height: 0 },
@@ -187,33 +225,16 @@ const styles = StyleSheet.create({
     shadowRadius: 30,
     elevation: 20,
   },
-  imageGradient: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 20,
+  introImage: {
+    width: "100%",
+    height: "100%",
   },
-  heartOuter: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: `${COLORS.accent}15`,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: `${COLORS.accent}33`,
-  },
-  heartInner: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: `${COLORS.accent}22`,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sparkleRow: {
-    flexDirection: "row",
-    gap: 10,
+  imageOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 100,
   },
   welcomeText: {
     alignItems: "center",
@@ -232,6 +253,33 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textAlign: "center",
     lineHeight: 22,
+  },
+  videoSection: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  videoWrapper: {
+    width: "100%",
+    aspectRatio: 9 / 16,
+    maxHeight: 480,
+    borderRadius: 20,
+    overflow: "hidden",
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 16,
+  },
+  video: {
+    flex: 1,
+  },
+  videoOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 80,
   },
   letterHeader: {
     alignItems: "center",
@@ -253,12 +301,8 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: COLORS.textPrimary,
   },
-  letterScroll: {
-    flex: 1,
-  },
-  letterContent: {
-    paddingBottom: 12,
-  },
+  letterScroll: { flex: 1 },
+  letterContent: { paddingBottom: 12 },
   letterCard: {
     backgroundColor: COLORS.bgCard,
     borderRadius: 20,
@@ -277,7 +321,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     fontSize: 15,
     color: COLORS.textSecondary,
-    lineHeight: 26,
+    lineHeight: 28,
     textAlign: "right",
     writingDirection: "rtl",
   },

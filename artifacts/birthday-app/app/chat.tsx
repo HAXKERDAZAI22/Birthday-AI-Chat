@@ -4,6 +4,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useCallback, useRef, useState } from "react";
 import {
+  Alert,
   FlatList,
   Platform,
   Pressable,
@@ -20,6 +21,7 @@ import { ModeSelector } from "@/components/ModeSelector";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { CHARACTER_LIST, CHARACTERS, Character } from "@/characters";
 import COLORS from "@/constants/colors";
+import { useApp } from "@/context/AppContext";
 import {
   ConversationMode,
   Message,
@@ -36,6 +38,7 @@ import {
 type ChatMode = "select" | "individual" | "group";
 
 export default function ChatScreen() {
+  const { resetIntro } = useApp();
   const insets = useSafeAreaInsets();
   const [chatMode, setChatMode] = useState<ChatMode>("select");
   const [selectedChar, setSelectedChar] = useState<Character | null>(null);
@@ -241,8 +244,28 @@ export default function ChatScreen() {
         style={[styles.container, { paddingTop: topInset }]}
       >
         <View style={styles.selectHeader}>
-          <Text style={styles.selectTitle}>Characters</Text>
-          <Text style={styles.selectSub}>Choose who to talk with</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.selectTitle}>Characters</Text>
+            <Text style={styles.selectSub}>Choose who to talk with</Text>
+          </View>
+          <Pressable
+            onPress={() =>
+              Alert.alert("Replay Intro", "Replay the intro sequence?", [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Replay",
+                  onPress: async () => {
+                    await resetIntro();
+                    router.replace("/intro");
+                  },
+                },
+              ])
+            }
+            hitSlop={10}
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Ionicons name="refresh-circle-outline" size={26} color={`${COLORS.accent}88`} />
+          </Pressable>
         </View>
 
         <View style={styles.characterGrid}>
@@ -426,7 +449,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 16,
     paddingBottom: 8,
-    gap: 4,
+    flexDirection: "row",
+    alignItems: "center",
   },
   selectTitle: {
     fontFamily: "Inter_700Bold",
