@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { ResizeMode, Video } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useRef, useState } from "react";
@@ -74,7 +74,7 @@ function ImageStep({ onNext }: { onNext: () => void }) {
             contentFit="cover"
           />
           <LinearGradient
-            colors={["transparent", `${COLORS.bgDeep}CC`, COLORS.bgDeep]}
+            colors={["transparent", `${COLORS.bgDeep}BB`, COLORS.bgDeep]}
             style={styles.imageOverlay}
           />
         </View>
@@ -86,69 +86,36 @@ function ImageStep({ onNext }: { onNext: () => void }) {
         </View>
       </View>
 
-      <Pressable
-        onPress={onNext}
-        style={({ pressed }) => [
-          styles.nextBtn,
-          { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
-        ]}
-      >
-        <LinearGradient
-          colors={[COLORS.accent, COLORS.accentSoft]}
-          style={styles.btnGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-        >
-          <Text style={styles.btnText}>Next</Text>
-          <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
-        </LinearGradient>
-      </Pressable>
+      <NextButton label="Next" onPress={onNext} />
     </View>
   );
 }
 
 function VideoStep({ onNext }: { onNext: () => void }) {
-  const player = useVideoPlayer(
-    require("@/assets/videos/intro.mp4"),
-    (p) => {
-      p.play();
-    }
-  );
+  const videoRef = useRef<Video>(null);
 
   return (
     <View style={styles.stepContainer}>
       <View style={styles.videoSection}>
         <View style={styles.videoWrapper}>
-          <VideoView
-            player={player}
+          <Video
+            ref={videoRef}
+            source={require("@/assets/videos/intro.mp4")}
             style={styles.video}
-            contentFit="cover"
-            nativeControls={false}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay
+            isLooping
+            isMuted={false}
+            useNativeControls={false}
           />
           <LinearGradient
-            colors={["transparent", `${COLORS.bgDeep}88`, COLORS.bgDeep]}
+            colors={["transparent", `${COLORS.bgDeep}77`, COLORS.bgDeep]}
             style={styles.videoOverlay}
           />
         </View>
       </View>
 
-      <Pressable
-        onPress={onNext}
-        style={({ pressed }) => [
-          styles.nextBtn,
-          { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
-        ]}
-      >
-        <LinearGradient
-          colors={[COLORS.accent, COLORS.accentSoft]}
-          style={styles.btnGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-        >
-          <Text style={styles.btnText}>Next</Text>
-          <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
-        </LinearGradient>
-      </Pressable>
+      <NextButton label="Next" onPress={onNext} />
     </View>
   );
 }
@@ -177,24 +144,30 @@ function LetterStep({ onNext }: { onNext: () => void }) {
         </View>
       </ScrollView>
 
-      <Pressable
-        onPress={onNext}
-        style={({ pressed }) => [
-          styles.nextBtn,
-          { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
-        ]}
-      >
-        <LinearGradient
-          colors={[COLORS.accent, COLORS.accentSoft]}
-          style={styles.btnGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-        >
-          <Text style={styles.btnText}>ابدأي المغامرة</Text>
-          <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
-        </LinearGradient>
-      </Pressable>
+      <NextButton label="ابدأي المغامرة" onPress={onNext} />
     </View>
+  );
+}
+
+function NextButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.nextBtn,
+        { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] },
+      ]}
+    >
+      <LinearGradient
+        colors={[COLORS.accent, COLORS.accentSoft]}
+        style={styles.btnGradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+      >
+        <Text style={styles.btnText}>{label}</Text>
+        <Ionicons name="arrow-forward" size={18} color={COLORS.bg} />
+      </LinearGradient>
+    </Pressable>
   );
 }
 

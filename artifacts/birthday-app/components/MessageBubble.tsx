@@ -1,12 +1,18 @@
+import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { CharacterAvatar } from "@/components/CharacterAvatar";
+import { CHARACTERS } from "@/characters";
 import COLORS from "@/constants/colors";
 import { Message } from "@/services/aiService";
-import { CHARACTERS } from "@/characters";
 
 interface MessageBubbleProps {
   message: Message;
   showCharacterName?: boolean;
+  isSelected?: boolean;
+  onLongPress?: (msg: Message) => void;
+  customCharacters?: Record<string, import("@/services/customCharacterService").CustomCharacter>;
 }
 
 function parseContent(content: string) {
@@ -33,22 +39,45 @@ function parseContent(content: string) {
   return parts;
 }
 
-export function MessageBubble({ message, showCharacterName = false }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  showCharacterName = false,
+  isSelected = false,
+  onLongPress,
+  customCharacters = {},
+}: MessageBubbleProps) {
   const isUser = message.role === "user";
-  const character = message.characterId ? CHARACTERS[message.characterId] : null;
+  const character = message.characterId
+    ? (CHARACTERS[message.characterId] ?? customCharacters[message.characterId] ?? null)
+    : null;
   const charColor = character?.color ?? COLORS.accent;
 
   const parts = isUser ? null : parseContent(message.content);
 
+  const handleLongPress = () => {
+    if (onLongPress) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      onLongPress(message);
+    }
+  };
+
   return (
-    <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      {!isUser && (
-        <View
-          style={[
-            styles.characterDot,
-            { backgroundColor: `${charColor}33`, borderColor: `${charColor}66` },
-          ]}
-        />
+    <Pressable
+      onLongPress={handleLongPress}
+      delayLongPress={400}
+      style={[
+        styles.row,
+        isUser ? styles.rowUser : styles.rowAssistant,
+        isSelected && styles.rowSelected,
+      ]}
+    >
+      {!isUser && character && (
+        <View style={styles.avatarWrap}>
+          <CharacterAvatar character={character} size={28} />
+        </View>
+      )}
+      {!isUser && !character && (
+        <View style={[styles.characterDot, { backgroundColor: `${charColor}33`, borderColor: `${charColor}66` }]} />
       )}
 
       <View style={[styles.bubbleWrapper, isUser ? styles.bubbleWrapperUser : styles.bubbleWrapperAssistant]}>
@@ -57,11 +86,27 @@ export function MessageBubble({ message, showCharacterName = false }: MessageBub
         )}
 
         {isUser ? (
-          <View style={styles.userBubble}>
+          <View
+            style={[
+              styles.userBubble,
+              isSelected && { borderWidth: 1.5, borderColor: `${COLORS.accent}88` },
+            ]}
+          >
             <Text style={styles.userText}>{message.content}</Text>
+            {isSelected && (
+              <View style={styles.selectedIndicator}>
+                <Ionicons name="checkmark-circle" size={14} color={`${COLORS.accent}AA`} />
+              </View>
+            )}
           </View>
         ) : (
-          <View style={[styles.assistantBubble, { borderColor: `${charColor}22` }]}>
+          <View
+            style={[
+              styles.assistantBubble,
+              { borderColor: `${charColor}22` },
+              isSelected && { borderColor: `${charColor}66`, borderWidth: 1.5 },
+            ]}
+          >
             {parts?.map((part, i) =>
               part.type === "action" ? (
                 <Text key={i} style={[styles.actionText, { color: `${charColor}BB` }]}>
@@ -73,10 +118,15 @@ export function MessageBubble({ message, showCharacterName = false }: MessageBub
                 </Text>
               )
             )}
+            {isSelected && (
+              <View style={styles.selectedIndicator}>
+                <Ionicons name="checkmark-circle" size={14} color={`${charColor}AA`} />
+              </View>
+            )}
           </View>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -94,6 +144,15 @@ const styles = StyleSheet.create({
   rowAssistant: {
     justifyContent: "flex-start",
   },
+  rowSelected: {
+    backgroundColor: `${COLORS.accent}08`,
+    borderRadius: 12,
+    marginHorizontal: 4,
+  },
+  avatarWrap: {
+    marginBottom: 4,
+    flexShrink: 0,
+  },
   characterDot: {
     width: 8,
     height: 8,
@@ -103,7 +162,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   bubbleWrapper: {
-    maxWidth: "82%",
+    maxWidth: "80%",
     gap: 4,
   },
   bubbleWrapperUser: {
@@ -152,5 +211,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontStyle: "italic",
     lineHeight: 19,
+  },
+  selectedIndicator: {
+    alignSelf: "flex-end",
+    marginTop: 4,
   },
 });

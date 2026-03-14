@@ -24,7 +24,9 @@ export function CharacterAvatar({
   showName = false,
   selected = false,
 }: CharacterAvatarProps) {
-  const imageSource = AVATAR_IMAGES[character.id];
+  const imageSource = character.avatarUri
+    ? { uri: character.avatarUri }
+    : AVATAR_IMAGES[character.id] ?? null;
 
   return (
     <View style={styles.wrapper}>

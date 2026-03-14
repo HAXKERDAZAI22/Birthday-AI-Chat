@@ -7,6 +7,8 @@ export interface Character {
   personality: string;
   systemPrompt: string;
   greetingGroup: string;
+  avatarUri?: string;
+  isCustom?: boolean;
 }
 
 export const CHARACTERS: Record<string, Character> = {
