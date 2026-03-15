@@ -4,13 +4,13 @@ import { CHARACTERS } from "../characters/index.js";
 
 const router: IRouter = Router();
 
-const OPENROUTER_BASE_URL = process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL
-  ? `${process.env.AI_INTEGRATIONS_OPENROUTER_BASE_URL}/chat/completions`
-  : "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-const OPENROUTER_API_KEY = process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY
-  || process.env.OPENROUTER_API_KEY
-  || "";
+const OPENROUTER_API_KEY =
+  process.env.OPENAI_API_KEY2 ||
+  process.env.OPENROUTER_API_KEY ||
+  process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY ||
+  "";
 
 const MODEL = "deepseek/deepseek-chat-v3-0324";
 
