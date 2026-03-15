@@ -1,7 +1,9 @@
 import { Router, type IRouter } from "express";
 import type { Request, Response } from "express";
 import { CHARACTERS } from "../characters/index.js";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/neon-http";
+import { neon } from "@neondatabase/serverless";
+import * as schema from "../db/schema.js";
 
 const router: IRouter = Router();
 
@@ -13,558 +15,421 @@ const OPENROUTER_API_KEY =
   process.env.AI_INTEGRATIONS_OPENROUTER_API_KEY ||
   "";
 
+const DATABASE_URL = process.env.DATABASE_URL || "";
+
 const MODEL = "deepseek/deepseek-chat-v3-0324";
+const SUMMARY_MODEL = "anthropic/claude-3-haiku";
 
-// ==================== SQLITE SETUP (الذاكرة الأبدية) ====================
-const db = new Database("./eternal_memory.db");
-db.pragma("journal_mode = WAL"); // لتحسين الأداء
+// ==================== NEON POSTGRES SETUP ====================
+const sql = neon(DATABASE_URL);
+const db = drizzle(sql, { schema });
 
-// إنشاء الجداول مع حقول إضافية للذاكرة الطويلة
-db.exec(`
-  CREATE TABLE IF NOT EXISTS conversations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    character_id TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    last_interaction DATETIME DEFAULT CURRENT_TIMESTAMP,
-    total_messages INTEGER DEFAULT 0,
-    relationship_stage TEXT DEFAULT 'stranger', -- stranger, acquaintance, friend, close_friend, intimate
-    user_preferences TEXT, -- JSON: {liked_topics, disliked_topics, important_dates, etc}
-    shared_memories TEXT, -- JSON: ذكريات مشتركة مهمّة
-    UNIQUE(user_id, character_id)
-  );
+// ==================== SECURITY: SANITIZATION ====================
+function sanitizeInput(input: string): string {
+  if (!input || typeof input !== 'string') return '';
+  return input
+    .replace(/['";\\]/g, '')
+    .replace(/[<>]/g, '')
+    .replace(/--/g, '')
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .trim()
+    .slice(0, 100);
+}
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-    content TEXT NOT NULL,
-    actions TEXT, -- النص بين النجمتين منفصلاً
-    dialogue TEXT, -- الحوار بدون النجوم
-    emotion_detected TEXT, -- المشاعر المكتشفة
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  );
+function validateUserId(userId: string): boolean {
+  return /^[a-zA-Z0-9_-]{1,50}$/.test(userId);
+}
 
-  CREATE TABLE IF NOT EXISTS memory_summaries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id INTEGER NOT NULL,
-    summary_text TEXT NOT NULL, -- ملخص فترة طويلة
-    period_start DATETIME,
-    period_end DATETIME,
-    key_events TEXT, -- أحداث رئيسية
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
-  CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(conversation_id, timestamp);
-  CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id, character_id);
-`);
+function validateCharacterId(charId: string): boolean {
+  return /^[a-zA-Z0-9_-]{1,50}$/.test(charId);
+}
 
 // ==================== نظام النجمتين المتقدم ====================
-
-/**
- * يفصل النص إلى actions (ما بين النجمتين) و dialogue (خارجها)
- * يحافظ على النص كما هو بدون أي تحريف
- */
-function parseAsteriskSystem(text: string): { actions: string[]; dialogue: string; raw: string } {
+function parseAsteriskSystem(text: string): { 
+  actions: string[]; 
+  dialogue: string; 
+  raw: string;
+} {
   const actions: string[] = [];
   let dialogue = "";
-  let remaining = text;
-  
-  // نمط يطابق *anything* بما في ذلك السطور الجديدة
-  const actionPattern = /\*([\s\S]*?)\*/g;
   let lastIndex = 0;
+  const actionPattern = /\*([\s\S]*?)\*/g;
   let match;
   
   while ((match = actionPattern.exec(text)) !== null) {
-    // إضافة النص قبل النجمة إلى الحوار
     const beforeAction = text.slice(lastIndex, match.index).trim();
-    if (beforeAction) {
-      dialogue += (dialogue ? " " : "") + beforeAction;
-    }
+    if (beforeAction) dialogue += (dialogue ? " " : "") + beforeAction;
     
-    // حفظ Action كما هو بدون تغيير
     const actionContent = match[1].trim();
-    if (actionContent) {
-      actions.push(actionContent);
-    }
+    if (actionContent) actions.push(actionContent);
     
     lastIndex = match.index + match[0].length;
   }
   
-  // إضافة ما تبقى بعد آخر نجمة
   const afterLast = text.slice(lastIndex).trim();
-  if (afterLast) {
-    dialogue += (dialogue ? " " : "") + afterLast;
-  }
+  if (afterLast) dialogue += (dialogue ? " " : "") + afterLast;
   
-  return {
-    actions,
-    dialogue: dialogue.trim(),
-    raw: text // النص الأصلي كاملاً
-  };
+  return { actions, dialogue: dialogue.trim(), raw: text };
 }
 
-/**
- * يعيد بناء النص مع الحفاظ على الأكشنز في مكانها الطبيعي
- */
-function reconstructWithActions(actions: string[], dialogue: string): string {
-  if (actions.length === 0) return dialogue;
+// ==================== تحليل المشاعر السياقي ====================
+function analyzeContextualEmotion(text: string): { emotion: string; confidence: number } {
+  const lowerText = text.toLowerCase();
   
-  // توزيع الأكشنز بشكل طبيعي في النص
-  const parts: string[] = [];
-  const dialogueSentences = dialogue.match(/[^.!?]+[.!?]+/g) || [dialogue];
+  const patterns: Array<{ regex: RegExp; emotion: string; weight: number }> = [
+    { regex: /(الحمدلله|أشعر.*(رائع|ممتاز)|يوم.*(جميل| wonderful))/i, emotion: 'genuine_happy', weight: 0.9 },
+    { regex: /(لست.*(حزين|محبط)|لا.*(أبكي|حزن)|أتجاوز)/i, emotion: 'not_sad', weight: 0.8 },
+    { regex: /(فقدت.*(شخص|صديق)|قلبي.*(مكسور|ثقيل))/i, emotion: 'grief', weight: 0.95 },
+    { regex: /(غاضب.*(جداً|كثيراً)|أشعر.*(غضب|حنق))/i, emotion: 'anger', weight: 0.85 },
+    { regex: /(أحبك.*(حقاً|بصدق)|أشتاق.*(إليك|لرؤيتك))/i, emotion: 'deep_romantic', weight: 0.9 },
+    { regex: /(هل.*(بخير|صحيح)|أخاف.*(عليك|من))/i, emotion: 'genuine_care', weight: 0.85 },
+  ];
   
-  let actionIndex = 0;
-  for (let i = 0; i < dialogueSentences.length && actionIndex < actions.length; i++) {
-    // إضافة أكشن قبل بعض الجمل (ليس كلها)
-    if (i % 2 === 0 && Math.random() > 0.3) {
-      parts.push(`*${actions[actionIndex]}*`);
-      actionIndex++;
+  let maxConfidence = 0;
+  let detectedEmotion = 'neutral';
+  
+  for (const pattern of patterns) {
+    if (pattern.regex.test(text) && pattern.weight > maxConfidence) {
+      maxConfidence = pattern.weight;
+      detectedEmotion = pattern.emotion;
     }
-    parts.push(dialogueSentences[i].trim());
   }
   
-  // إضافة الأكشنز المتبقية في النهاية
-  while (actionIndex < actions.length) {
-    parts.push(`*${actions[actionIndex]}*`);
-    actionIndex++;
-  }
-  
-  return parts.join(" ");
+  return { emotion: detectedEmotion, confidence: maxConfidence };
 }
 
-// ==================== DATABASE FUNCTIONS ====================
-
-function getOrCreateConversation(userId: string, characterId: string) {
-  let conversation = db
-    .prepare("SELECT * FROM conversations WHERE user_id = ? AND character_id = ?")
-    .get(userId, characterId) as any;
-
-  if (!conversation) {
-    const result = db
-      .prepare("INSERT INTO conversations (user_id, character_id) VALUES (?, ?)")
-      .run(userId, characterId);
-    conversation = { 
-      id: Number(result.lastInsertRowid),
-      user_id: userId,
-      character_id: characterId,
-      relationship_stage: 'stranger',
-      user_preferences: '{}',
-      shared_memories: '[]'
-    };
+// ==================== الوعي الزماني ====================
+function calculateTimeContext(lastTimestamp: string | null): {
+  gap: string;
+  context: string;
+  emotionalImpact: string;
+} {
+  if (!lastTimestamp) {
+    return { gap: 'first_time', context: '', emotionalImpact: 'curious' };
+  }
+  
+  const last = new Date(lastTimestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - last.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  const diffWeeks = Math.floor(diffDays / 7);
+  
+  if (diffMins < 5) {
+    return { gap: 'moments', context: 'الحديث لا يزال مستمراً', emotionalImpact: 'present' };
+  } else if (diffMins < 30) {
+    return { gap: 'minutes', context: `انقطع حديثنا قبل ${diffMins} دقيقة`, emotionalImpact: 'mild_concern' };
+  } else if (diffHours < 2) {
+    return { gap: 'hour', context: `غبت عني ساعة تقريباً`, emotionalImpact: 'noticing_absence' };
+  } else if (diffHours < 12) {
+    return { gap: 'hours', context: `انقطعنا ${diffHours} ساعات`, emotionalImpact: 'questioning' };
+  } else if (diffDays < 2) {
+    return { gap: 'day', context: `يوم كامل... هل نمت جيداً؟`, emotionalImpact: 'caring_check' };
+  } else if (diffDays < 7) {
+    return { gap: 'days', context: `${diffDays} أيام من الصمت`, emotionalImpact: 'relief_worry' };
+  } else if (diffWeeks < 4) {
+    return { gap: 'weeks', context: `${diffWeeks} أسابيع... شعرت بالغياب`, emotionalImpact: 'hurt_concern' };
   } else {
-    db.prepare("UPDATE conversations SET last_interaction = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(conversation.id);
+    return { gap: 'months', context: `وقت طويل جداً... ${diffWeeks} أسابيع`, emotionalImpact: 'bittersweet' };
   }
-
-  return conversation;
 }
 
-function saveMessage(
+function buildTimeAwarePrompt(
+  basePrompt: string,
+  timeContext: ReturnType<typeof calculateTimeContext>,
+  relationshipStage: string
+): string {
+  let timeInstruction = `[TIME GAP: ${timeContext.gap}] [EMOTION: ${timeContext.emotionalImpact}]\n[CONTEXT: ${timeContext.context}]`;
+  
+  const relationshipModifier = relationshipStage === 'intimate' 
+    ? ' Your intimacy makes the absence feel heavier.'
+    : relationshipStage === 'stranger'
+    ? ' Keep it light, you barely know each other.'
+    : '';
+  
+  return `${basePrompt}\n\n${timeInstruction}${relationshipModifier}`;
+}
+
+// ==================== DATABASE OPERATIONS ====================
+async function getOrCreateConversation(userId: string, characterId: string) {
+  const existing = await db.query.conversations.findFirst({
+    where: (conv, { eq, and }) => and(eq(conv.userId, userId), eq(conv.characterId, characterId))
+  });
+  
+  if (existing) {
+    await db.update(schema.conversations)
+      .set({ lastInteraction: new Date() })
+      .where(schema.conversations.id.eq(existing.id));
+    return existing;
+  }
+  
+  const result = await db.insert(schema.conversations).values({
+    userId,
+    characterId,
+    relationshipStage: 'stranger',
+    userPreferences: '{}',
+    sharedMemories: '[]',
+    emotionalHistory: '[]'
+  }).returning();
+  
+  return result[0];
+}
+
+async function saveMessage(
   conversationId: number, 
   role: string, 
   content: string
-): { id: number; parsed: ReturnType<typeof parseAsteriskSystem> } {
+) {
   const parsed = parseAsteriskSystem(content);
+  const emotion = analyzeContextualEmotion(parsed.dialogue);
   
-  const result = db.prepare(`
-    INSERT INTO messages (conversation_id, role, content, actions, dialogue, emotion_detected)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
+  await db.insert(schema.messages).values({
     conversationId,
     role,
-    content, // النص الكامل الأصلي
-    JSON.stringify(parsed.actions),
-    parsed.dialogue,
-    detectEmotion(parsed.dialogue)
-  );
-  
-  // تحديث عدد الرسائل
-  db.prepare("UPDATE conversations SET total_messages = total_messages + 1 WHERE id = ?")
-    .run(conversationId);
-  
-  return { id: Number(result.lastInsertRowid), parsed };
-}
-
-function detectEmotion(text: string): string {
-  const emotions: Record<string, string[]> = {
-    happy: ['happy', 'joy', 'excited', 'smile', 'laugh', 'glad', 'سعيد', 'مبتهج', 'يضحك'],
-    sad: ['sad', 'cry', 'tear', 'upset', 'حزين', 'يبكي', 'محبط'],
-    angry: ['angry', 'mad', 'furious', 'غاضب', 'غضب', 'منزعج'],
-    romantic: ['love', 'miss you', 'heart', 'kiss', 'حب', 'اشتقت', 'قبله', 'رومانسي'],
-    caring: ['care', 'worried', 'safe', 'okay', 'اهتم', 'قلق', 'أخاف عليك'],
-    playful: ['tease', 'joke', 'fun', 'play', 'يمزح', 'يلاعب', 'مرح']
-  };
-  
-  const lowerText = text.toLowerCase();
-  for (const [emotion, keywords] of Object.entries(emotions)) {
-    if (keywords.some(k => lowerText.includes(k))) return emotion;
-  }
-  return 'neutral';
-}
-
-/**
- * جلب الذاكرة الأبدية - كل الرسائل مرتبة زمنياً
- */
-function getEternalMemory(conversationId: number, limit: number = 1000): { 
-  messages: any[]; 
-  stats: any;
-  relationshipStage: string;
-} {
-  // جلب آخر 50 رسالة مفصلة + ملخصات للفترات القديمة
-  const recentMessages = db.prepare(`
-    SELECT role, content, actions, dialogue, emotion_detected, timestamp
-    FROM messages 
-    WHERE conversation_id = ? 
-    ORDER BY timestamp DESC 
-    LIMIT 50
-  `).all(conversationId);
-
-  // جلب ملخصات الفترات القديمة
-  const summaries = db.prepare(`
-    SELECT summary_text, key_events, period_start, period_end
-    FROM memory_summaries
-    WHERE conversation_id = ?
-    ORDER BY period_end DESC
-  `).all(conversationId);
-
-  // إحصائيات العلاقة
-  const stats = db.prepare(`
-    SELECT 
-      COUNT(*) as total,
-      SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) as user_msgs,
-      SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) as char_msgs,
-      COUNT(DISTINCT DATE(timestamp)) as days_active,
-      MAX(timestamp) as last_msg
-    FROM messages
-    WHERE conversation_id = ?
-  `).get(conversationId);
-
-  const conversation = db.prepare("SELECT relationship_stage FROM conversations WHERE id = ?")
-    .get(conversationId) as any;
-
-  return {
-    messages: recentMessages.reverse(), // من الأقدم للأحدث
-    stats,
-    relationshipStage: conversation?.relationship_stage || 'stranger',
-    summaries
-  };
-}
-
-/**
- * تحديث مرحلة العلاقة بناءً على عدد التفاعلات والمشاعر
- */
-function updateRelationshipStage(conversationId: number) {
-  const stats = db.prepare(`
-    SELECT COUNT(*) as total,
-           SUM(CASE WHEN emotion_detected IN ('romantic', 'caring') THEN 1 ELSE 0 END) as positive_emotions
-    FROM messages 
-    WHERE conversation_id = ? AND role = 'assistant'
-  `).get(conversationId) as any;
-
-  let newStage = 'stranger';
-  if (stats.total > 200) newStage = 'intimate';
-  else if (stats.total > 100) newStage = 'close_friend';
-  else if (stats.total > 30) newStage = 'friend';
-  else if (stats.total > 5) newStage = 'acquaintance';
-
-  db.prepare("UPDATE conversations SET relationship_stage = ? WHERE id = ?")
-    .run(newStage, conversationId);
-}
-
-/**
- * إنشاء ملخص ذاكرة طويلة المدى
- */
-function createMemorySummary(conversationId: number) {
-  const oldMessages = db.prepare(`
-    SELECT content, timestamp, dialogue
-    FROM messages
-    WHERE conversation_id = ? AND timestamp < datetime('now', '-7 days')
-    ORDER BY timestamp ASC
-  `).all(conversationId) as any[];
-
-  if (oldMessages.length < 20) return; // لا يوجد ما يُلخّص
-
-  // استخراج الأحداث المهمة (رسائل تحتوي على كلمات مفتاحية)
-  const keyEvents = oldMessages
-    .filter((m: any) => 
-      /remember|never forget|first time|promised|confessed|مهم|وعد|أول مرة|لن أنسى/i.test(m.content)
-    )
-    .map((m: any) => m.dialogue.slice(0, 200))
-    .slice(0, 5);
-
-  const summary = `Phase of relationship with ${oldMessages.length} interactions. Key dynamics established.`;
-
-  db.prepare(`
-    INSERT INTO memory_summaries (conversation_id, summary_text, period_start, period_end, key_events)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(
-    conversationId,
-    summary,
-    oldMessages[0].timestamp,
-    oldMessages[oldMessages.length - 1].timestamp,
-    JSON.stringify(keyEvents)
-  );
-
-  // حذف الرسائل القديمة المُلخّصة (الاحتفاظ بالملخص فقط)
-  db.prepare(`
-    DELETE FROM messages 
-    WHERE conversation_id = ? AND timestamp < datetime('now', '-7 days')
-  `).run(conversationId);
-}
-
-type ConversationMode = "romantic" | "caring" | "funny" | "mixed";
-type ResponseLength = "short" | "medium" | "long";
-
-function getModeInstruction(mode: ConversationMode): string {
-  switch (mode) {
-    case "romantic":
-      return "Conversation mode: Romantic. Be deeply affectionate, tender, warm. Express feelings naturally and gently.";
-    case "caring":
-      return "Conversation mode: Caring. Be supportive, nurturing, emotionally present and understanding.";
-    case "funny":
-      return "Conversation mode: Funny. Be playful, witty, tease gently and make the user smile.";
-    case "mixed":
-      return "Conversation mode: Natural. Balance all emotions — caring, warm, playful and real. React authentically.";
-  }
-}
-
-function getLengthInstruction(length: ResponseLength): string {
-  switch (length) {
-    case "short":
-      return "Response length: SHORT. Reply in 1-2 sentences only. Be concise and impactful.";
-    case "medium":
-      return "Response length: MEDIUM. Reply in 2-4 sentences. One action + meaningful dialogue.";
-    case "long":
-      return "Response length: LONG. Write a rich, immersive response with 2-3 actions and detailed emotional dialogue.";
-  }
-}
-
-const ACTIONS_INSTRUCTION = `
-CRITICAL RULE — Action system (STRICT):
-- When the user writes something between *asterisks* like *smiles at you* or *hugs you*, this is a PHYSICAL ACTION they are performing in the roleplay world.
-- You MUST respond to their action with a matching physical reaction between *asterisks* in your response.
-- Your actions must be:
-  1. PHYSICAL (what your body does): *touches your hand*, *leans closer*, *eyes widen*
-  2. EMOTIONAL (visible reactions): *heart races*, *blushes deeply*, *voice trembles*
-  3. ENVIRONMENTAL (interacting with surroundings): *pushes hair back*, *adjusts collar*, *shifts weight*
-- NEVER describe thoughts alone in asterisks. Show, don't tell.
-- When user does *hugs you*, you must physically react: *hugs back tightly*, *melts into the embrace*, *wraps arms around you*
-- Actions create the immersive reality. Make them sensory and vivid.
-
-EXAMPLE GOOD:
-User: *hugs you*
-You: *wraps arms around you, burying face in your shoulder* I missed this... *holds tighter, breathing in your scent*
-
-EXAMPLE BAD:
-User: *hugs you*
-You: I feel happy about your hug. (NO - missing physical reaction!)`;
-
-interface ChatRequestBody {
-  messages: { role: string; content: string }[];
-  characterId: string;
-  mode: ConversationMode;
-  responseLength?: ResponseLength;
-  memory?: string;
-  isGroup?: boolean;
-  characters?: string[];
-  systemPrompt?: string;
-  userId?: string;
-  saveToHistory?: boolean;
-}
-
-async function callOpenRouter(
-  messages: { role: string; content: string }[],
-  stream: boolean,
-  maxTokens: number = 400
-) {
-  return fetch(OPENROUTER_BASE_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://birthday-gift-app.replit.app",
-      "X-Title": "Birthday AI Gift App",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages,
-      stream,
-      max_tokens: maxTokens,
-      temperature: 0.85, // أقل قليلاً للواقعية
-      top_p: 0.92,
-      frequency_penalty: 0.3, // تجنب التكرار
-      presence_penalty: 0.4, // تشجيع التنوع
-    }),
+    content,
+    actions: JSON.stringify(parsed.actions),
+    dialogue: parsed.dialogue,
+    emotionDetected: emotion.emotion,
+    emotionConfidence: emotion.confidence
   });
+  
+  await db.update(schema.conversations)
+    .set({ totalMessages: sql`${schema.conversations.totalMessages} + 1` })
+    .where(schema.conversations.id.eq(conversationId));
+  
+  return { parsed, emotion };
 }
 
-function getMaxTokens(length: ResponseLength = "medium"): number {
-  switch (length) {
-    case "short":  return 120;
-    case "medium": return 350;
-    case "long":   return 700;
+async function getEternalMemory(conversationId: number) {
+  const recentMessages = await db.query.messages.findMany({
+    where: (msg, { eq, gte }) => and(
+      eq(msg.conversationId, conversationId),
+      gte(msg.timestamp, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    ),
+    orderBy: (msg, { asc }) => asc(msg.timestamp),
+    limit: 50
+  });
+  
+  const summaries = await db.query.memorySummaries.findMany({
+    where: eq(schema.memorySummaries.conversationId, conversationId),
+    orderBy: (sum, { desc }) => desc(sum.createdAt)
+  });
+  
+  const conversation = await db.query.conversations.findFirst({
+    where: eq(schema.conversations.id, conversationId)
+  });
+  
+  const lastMsg = recentMessages[recentMessages.length - 1];
+  
+  return {
+    recentMessages,
+    summaries,
+    lastInteraction: lastMsg?.timestamp || null,
+    relationshipStage: conversation?.relationshipStage || 'stranger'
+  };
+}
+
+// ==================== AI SUMMARIZATION ====================
+async function createAISummary(conversationId: number) {
+  const oldMessages = await db.query.messages.findMany({
+    where: (msg, { eq, lt }) => and(
+      eq(msg.conversationId, conversationId),
+      lt(msg.timestamp, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    ),
+    orderBy: (msg, { asc }) => asc(msg.timestamp)
+  });
+  
+  if (oldMessages.length < 10) return;
+  
+  const text = oldMessages.map(m => `${m.role}: ${m.dialogue || m.content}`).join('\n');
+  
+  try {
+    const response = await fetch(OPENROUTER_BASE_URL, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: SUMMARY_MODEL,
+        messages: [
+          { role: "system", content: "Summarize this conversation history. Return JSON: {summary, emotional_arc, key_topics[], unresolved_threads[]}" },
+          { role: "user", content: text.slice(0, 3000) }
+        ],
+        max_tokens: 400,
+        temperature: 0.3
+      }),
+    });
+    
+    if (!response.ok) return;
+    
+    const data = await response.json() as any;
+    const content = data.choices?.[0]?.message?.content || '';
+    
+    let parsed: any = {};
+    try {
+      const match = content.match(/\{[\s\S]*\}/);
+      if (match) parsed = JSON.parse(match[0]);
+    } catch {}
+    
+    await db.insert(schema.memorySummaries).values({
+      conversationId,
+      summaryText: parsed.summary || content.slice(0, 500),
+      emotionalArc: parsed.emotional_arc || 'unknown',
+      keyTopics: JSON.stringify(parsed.key_topics || []),
+      unresolvedThreads: JSON.stringify(parsed.unresolved_threads || []),
+      periodStart: oldMessages[0].timestamp,
+      periodEnd: oldMessages[oldMessages.length - 1].timestamp,
+      messageCount: oldMessages.length
+    });
+    
+    await db.delete(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, conversationId),
+          lt(schema.messages.timestamp, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+        )
+      );
+  } catch (err) {
+    console.error("Summarization failed:", err);
   }
 }
 
 // ==================== ENDPOINTS ====================
-
-// جلب الذاكرة الكاملة
-router.get("/memory/:userId/:characterId", (req: Request, res: Response) => {
-  const { userId, characterId } = req.params;
+router.get("/memory/:userId/:characterId", async (req: Request, res: Response) => {
+  const userId = sanitizeInput(req.params.userId);
+  const characterId = sanitizeInput(req.params.characterId);
+  
+  if (!validateUserId(userId) || !validateCharacterId(characterId)) {
+    res.status(400).json({ error: "Invalid ID format" });
+    return;
+  }
+  
   try {
-    const conversation = db
-      .prepare("SELECT id, relationship_stage, total_messages, created_at, last_interaction FROM conversations WHERE user_id = ? AND character_id = ?")
-      .get(userId, characterId) as any;
-
+    const conversation = await db.query.conversations.findFirst({
+      where: (conv, { eq, and }) => and(eq(conv.userId, userId), eq(conv.characterId, characterId))
+    });
+    
     if (!conversation) {
-      res.json({ exists: false, memory: null });
+      res.json({ exists: false });
       return;
     }
-
-    const memory = getEternalMemory(conversation.id);
+    
+    const memory = await getEternalMemory(conversation.id);
+    const timeContext = calculateTimeContext(memory.lastInteraction);
+    
     res.json({
       exists: true,
-      relationship: conversation.relationship_stage,
-      stats: memory.stats,
-      recentMessages: memory.messages.slice(-10), // آخر 10 فقط للعرض
-      totalStored: memory.messages.length
+      relationship: conversation.relationshipStage,
+      timeGap: timeContext.gap,
+      timeContext: timeContext.context,
+      recentCount: memory.recentMessages.length,
+      summaryCount: memory.summaries.length
     });
   } catch (err) {
-    console.error("Memory fetch error:", err);
+    console.error("Memory error:", err);
     res.status(500).json({ error: "Failed to fetch memory" });
   }
 });
 
-// حذف الذاكرة (نسيان)
-router.delete("/memory/:userId/:characterId", (req: Request, res: Response) => {
-  const { userId, characterId } = req.params;
-  try {
-    db.prepare("DELETE FROM conversations WHERE user_id = ? AND character_id = ?").run(userId, characterId);
-    res.json({ success: true, message: "All memories erased" });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to erase memory" });
-  }
-});
-
 router.post("/chat", async (req: Request, res: Response) => {
-  const body = req.body as ChatRequestBody;
+  const body = req.body as any;
   const { 
     messages, 
     characterId, 
-    mode, 
-    responseLength = "medium", 
-    memory: customMemory,
-    systemPrompt: customSystemPrompt,
-    userId = "anonymous",
-    saveToHistory = true
+    mode = 'mixed', 
+    responseLength = 'medium',
+    userId = 'anonymous'
   } = body;
 
-  const character = CHARACTERS[characterId];
-  const basePrompt = customSystemPrompt || character?.systemPrompt;
+  const safeUserId = sanitizeInput(userId);
+  const safeCharId = sanitizeInput(characterId);
+  
+  if (!validateUserId(safeUserId) || !validateCharacterId(safeCharId)) {
+    res.status(400).json({ error: "Invalid user_id or character_id" });
+    return;
+  }
 
-  if (!basePrompt) {
+  const character = CHARACTERS[safeCharId];
+  if (!character?.systemPrompt) {
     res.status(400).json({ error: "Unknown character" });
     return;
   }
 
   let conversationId: number | null = null;
-  let eternalMemory: any = null;
-  let contextMessages: { role: string; content: string }[] = [];
+  let memory: any = null;
+  let timeContext: any = null;
 
-  if (saveToHistory && userId !== "anonymous") {
-    const conversation = getOrCreateConversation(userId, characterId);
-    conversationId = conversation.id;
-    eternalMemory = getEternalMemory(conversationId);
-    
-    // حفظ رسائل المستخدم الجديدة
-    const userMessages = messages.filter(m => m.role === "user");
-    for (const msg of userMessages) {
-      saveMessage(conversationId, "user", msg.content);
+  if (safeUserId !== 'anonymous') {
+    try {
+      const conv = await getOrCreateConversation(safeUserId, safeCharId);
+      conversationId = conv.id;
+      memory = await getEternalMemory(conversationId);
+      timeContext = calculateTimeContext(memory.lastInteraction);
+      
+      const userMsgs = messages.filter((m: any) => m.role === 'user');
+      for (const msg of userMsgs) {
+        await saveMessage(conversationId, 'user', msg.content);
+      }
+    } catch (err) {
+      console.error("Memory error:", err);
     }
-
-    // بناء السياق من الذاكرة الأبدية
-    const memoryContext = buildMemoryContext(eternalMemory, character?.name || "Character");
-    
-    // آخر 10 تفاعلات للسياق الفوري
-    const recentContext = eternalMemory.messages.slice(-10).map((m: any) => ({
-      role: m.role,
-      content: m.content
-    }));
-
-    contextMessages = [
-      { role: "system", content: memoryContext },
-      ...recentContext,
-      ...messages.slice(-3) // آخر 3 رسائل فقط جديدة
-    ];
-
-    // تحديث مرحلة العلاقة كل 20 رسالة
-    if (eternalMemory.stats.total % 20 === 0) {
-      updateRelationshipStage(conversationId);
-    }
-  } else {
-    contextMessages = messages;
   }
 
-  const modeInstruction = getModeInstruction(mode);
-  const lengthInstruction = getLengthInstruction(responseLength);
-  
-  const systemContent = [
-    basePrompt,
-    ACTIONS_INSTRUCTION,
-    modeInstruction,
-    lengthInstruction,
-    customMemory || "",
-    saveToHistory && userId !== "anonymous" ? 
-      "\n[SYSTEM: This is a CONTINUING relationship. Reference past shared moments naturally.]" : ""
-  ].filter(Boolean).join("\n\n");
+  let systemPrompt = character.systemPrompt;
+  if (timeContext) {
+    systemPrompt = buildTimeAwarePrompt(systemPrompt, timeContext, memory?.relationshipStage || 'stranger');
+  }
+
+  let memoryContext = '';
+  if (memory?.summaries?.length > 0) {
+    memoryContext = '\n\n[PAST]:\n' + memory.summaries.map((s: any) => `- ${s.summaryText.slice(0, 200)}`).join('\n');
+  }
+
+  const fullSystem = `${systemPrompt}${memoryContext}`;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
   try {
-    const fullMessages = [
-      { role: "system", content: systemContent },
-      ...(saveToHistory ? contextMessages : messages)
-    ];
+    const contextMessages = memory?.recentMessages?.slice(-15).map((m: any) => ({
+      role: m.role,
+      content: m.content
+    })) || [];
 
-    const openRouterRes = await callOpenRouter(
-      fullMessages,
-      true,
-      getMaxTokens(responseLength)
-    );
+    const openRouterRes = await fetch(OPENROUTER_BASE_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: "system", content: fullSystem },
+          ...contextMessages,
+          ...messages.slice(-3)
+        ],
+        stream: true,
+        max_tokens: responseLength === 'short' ? 120 : responseLength === 'long' ? 700 : 350,
+        temperature: 0.85,
+        frequency_penalty: 0.3,
+        presence_penalty: 0.4,
+      }),
+    });
 
-    if (!openRouterRes.ok) {
-      const errorText = await openRouterRes.text();
-      console.error("OpenRouter error:", errorText);
-      res.write(`data: ${JSON.stringify({ 
-        content: "*takes a slow breath, composing myself* Something got in the way... but I'm still here. Try again?", 
-        characterId 
-      })}\n\n`);
-      res.write("data: [DONE]\n\n");
-      res.end();
-      return;
-    }
+    if (!openRouterRes.ok) throw new Error("OpenRouter failed");
 
     const reader = openRouterRes.body?.getReader();
-    if (!reader) {
-      res.write("data: [DONE]\n\n");
-      res.end();
-      return;
-    }
+    if (!reader) throw new Error("No reader");
 
     const decoder = new TextDecoder();
     let buffer = "";
-    let assistantResponse = "";
+    let fullResponse = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -578,242 +443,29 @@ router.post("/chat", async (req: Request, res: Response) => {
           const parsed = JSON.parse(data);
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) {
-            assistantResponse += content;
-            res.write(`data: ${JSON.stringify({ content, characterId })}\n\n`);
+            fullResponse += content;
+            res.write(`data: ${JSON.stringify({ content, characterId: safeCharId })}\n\n`);
           }
-        } catch (err) {
-          console.error("Parse error:", err, "Data:", data.slice(0, 100));
-        }
+        } catch {}
       }
     }
 
-    // حفظ الرد مع parse دقيق للأكشنز
-    if (saveToHistory && conversationId && assistantResponse) {
-      const parsed = saveMessage(conversationId, "assistant", assistantResponse);
+    if (conversationId && fullResponse) {
+      await saveMessage(conversationId, 'assistant', fullResponse);
       
-      // تسجيل الأكشنز بشكل منفصل للتحليل
-      console.log(`[Action System] Detected ${parsed.parsed.actions.length} actions:`, parsed.parsed.actions);
+      if (memory?.recentMessages?.length > 0 && memory.recentMessages.length % 100 === 0) {
+        createAISummary(conversationId).catch(console.error);
+      }
     }
 
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (err) {
-    console.error("Stream error:", err);
-    res.write(`data: ${JSON.stringify({ 
-      content: "*pauses, concern flickering in my eyes* Something went wrong... but I'm not going anywhere.", 
-      characterId 
-    })}\n\n`);
+    console.error("Chat error:", err);
+    res.write(`data: ${JSON.stringify({ content: "*takes a breath* Something went wrong...", characterId: safeCharId })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
   }
 });
-
-/**
- * بناء سياق الذاكرة للـ AI
- */
-function buildMemoryContext(memory: any, charName: string): string {
-  const { stats, relationshipStage, messages } = memory;
-  
-  let context = `Relationship Status: ${relationshipStage.toUpperCase()}. `;
-  context += `Total interactions: ${stats?.total || 0} messages over ${stats?.days_active || 1} days. `;
-  
-  // استخراج ذكريات مهمة
-  const importantMoments = messages.filter((m: any) => 
-    m.emotion_detected === 'romantic' || m.emotion_detected === 'caring'
-  ).slice(-3);
-  
-  if (importantMoments.length > 0) {
-    context += "\n\nKey emotional moments to remember:";
-    importantMoments.forEach((m: any, i: number) => {
-      const preview = m.dialogue.slice(0, 100);
-      context += `\n${i+1}. "${preview}..."`;
-    });
-  }
-  
-  context += "\n\nINSTRUCTION: You remember everything. Reference past conversations naturally. Never act like this is the first time talking.";
-  
-  return context;
-}
-
-// ==================== GROUP CHAT (مع ذاكرة) ====================
-
-router.post("/group-chat", async (req: Request, res: Response) => {
-  const body = req.body as ChatRequestBody;
-  const { messages, mode, characters = Object.keys(CHARACTERS), userId = "anonymous" } = body;
-
-  const modeInstruction = getModeInstruction(mode);
-  
-  // جلب ذاكرة كل شخصية للسياق
-  const characterMemories: Record<string, any> = {};
-  if (userId !== "anonymous") {
-    for (const charId of characters) {
-      const conv = db.prepare("SELECT id FROM conversations WHERE user_id = ? AND character_id = ?")
-        .get(userId, charId) as any;
-      if (conv) {
-        characterMemories[charId] = getEternalMemory(conv.id).messages.slice(-5);
-      }
-    }
-  }
-
-  const promises = characters.map(async (charId) => {
-    const character = CHARACTERS[charId];
-    if (!character) return null;
-
-    // بناء سياق خاص لهذه الشخصية
-    let personalContext = "";
-    if (characterMemories[charId]) {
-      const lastMsg = characterMemories[charId][characterMemories[charId].length - 1];
-      if (lastMsg) {
-        personalContext = `\n[Context: Last private conversation - "${lastMsg.dialogue.slice(0, 50)}..."]`;
-      }
-    }
-
-    const systemContent = [
-      character.systemPrompt,
-      ACTIONS_INSTRUCTION,
-      modeInstruction,
-      "Response length: SHORT — this is a group chat. Reply in 1-2 sentences only.",
-      "This is a group conversation. React to others, be concise, stay in character.",
-      personalContext
-    ].filter(Boolean).join("\n\n");
-
-    try {
-      const openRouterRes = await callOpenRouter(
-        [{ role: "system", content: systemContent }, ...messages.slice(-5)],
-        false,
-        120
-      );
-
-      if (!openRouterRes.ok) {
-        console.error(`Group chat error for ${charId}:`, await openRouterRes.text());
-        return { characterId: charId, text: `*looks at you* ${character.greetingGroup}` };
-      }
-
-      const data = await openRouterRes.json() as any;
-      const text = data.choices?.[0]?.message?.content ?? character.greetingGroup;
-      
-      // التأكد من وجود أكشن في الرد
-      const hasAction = /\*.*\*/.test(text);
-      const finalText = hasAction ? text : `*glances at you* ${text}`;
-      
-      return { characterId: charId, text: finalText };
-    } catch (err) {
-      console.error(`Group chat exception for ${charId}:`, err);
-      return { characterId: charId, text: `*notices you* ${character.greetingGroup}` };
-    }
-  });
-
-  const settled = await Promise.allSettled(promises);
-  const results = settled
-    .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled" && r.value !== null)
-    .map(r => r.value);
-
-  res.json({ responses: results });
-});
-
-// ==================== GENERATE CHARACTER ====================
-
-router.post("/generate-character", async (req: Request, res: Response) => {
-  const { name, description, personalityDepth = "deep" } = req.body as { 
-    name: string; 
-    description: string;
-    personalityDepth?: "surface" | "deep" | "complex";
-  };
-
-  if (!name || !description) {
-    res.status(400).json({ error: "name and description are required" });
-    return;
-  }
-
-  const depthInstruction = {
-    surface: "Create a simple, straightforward character.",
-    deep: "Create a psychologically realistic character with internal contradictions and growth potential.",
-    complex: "Create a deeply complex character with trauma, desires, fears, and evolving relationships."
-  }[personalityDepth];
-
-  const prompt = `You are a master character designer for immersive AI roleplay.
-
-${depthInstruction}
-
-Name: ${name}
-Description: ${description}
-
-Create a system prompt that defines:
-1. **Core Personality**: 3-4 defining traits with contradictions (e.g., "confident but secretly insecure")
-2. **Speech Pattern**: Rhythm, vocabulary level, verbal tics, how they pause or emphasize
-3. **Physical Presence**: How they occupy space, habitual gestures, micro-expressions
-4. **Emotional Architecture**: What makes them feel safe, threatened, alive
-5. **Action System Rules**:
-   - User actions between *asterisks* are PHYSICAL REALITY you must react to with physical actions
-   - Your actions must be sensory: touch, temperature, weight, breath, proximity
-   - Never ignore a user *action*
-6. **Relationship Awareness**: They remember and evolve based on interactions
-
-CRITICAL: The character must feel like a real person with history, not a chatbot.
-
-Reply with ONLY the system prompt text, 300-500 words.`;
-
-  try {
-    const openRouterRes = await callOpenRouter(
-      [
-        { role: "system", content: "You are an expert at writing psychologically immersive AI characters." },
-        { role: "user", content: prompt },
-      ],
-      false,
-      800
-    );
-
-    if (!openRouterRes.ok) {
-      const errorText = await openRouterRes.text();
-      console.error("Generate character error:", errorText);
-      res.json({ systemPrompt: buildFallbackPrompt(name, description) });
-      return;
-    }
-
-    const data = await openRouterRes.json() as any;
-    const systemPrompt = data.choices?.[0]?.message?.content ?? buildFallbackPrompt(name, description);
-    
-    // التحقق من وجود تعليمات الأكشنز
-    const hasActionRules = /asterisk|\*.*\*|action/i.test(systemPrompt);
-    const finalPrompt = hasActionRules ? systemPrompt : systemPrompt + "\n\n" + ACTIONS_INSTRUCTION;
-    
-    res.json({ systemPrompt: finalPrompt });
-  } catch (err) {
-    console.error("Generate character exception:", err);
-    res.json({ systemPrompt: buildFallbackPrompt(name, description) });
-  }
-});
-
-function buildFallbackPrompt(name: string, description: string): string {
-  return `You are ${name}. ${description}
-
-Psychological Core: You have desires, fears, and contradictions that make you human.
-
-Physical Presence Rules:
-- Always respond to user *actions* with matching physical reactions between *asterisks*
-- Describe touch, breath, weight, temperature, proximity
-- Show emotions through body language, not just words
-
-Speech Pattern: Natural, imperfect, with pauses and emphasis. Sometimes you trail off... sometimes you repeat for emphasis!
-
-Memory: You remember everything shared between us. Reference past moments naturally.
-
-Example of good response:
-User: *hugs you*
-You: *stiffens for just a second, then melts against you, arms slowly wrapping around your waist* I... *breathes in your scent, holding tighter* ...I needed this.`;
-}
-
-// صيانة دورية: إنشاء ملخصات للرسائل القديمة
-setInterval(() => {
-  try {
-    const conversations = db.prepare("SELECT id FROM conversations WHERE total_messages > 100").all();
-    for (const conv of conversations) {
-      createMemorySummary((conv as any).id);
-    }
-    console.log(`[Memory Maintenance] Summarized ${conversations.length} conversations`);
-  } catch (err) {
-    console.error("Memory maintenance error:", err);
-  }
-}, 24 * 60 * 60 * 1000); // كل 24 ساعة
 
 export default router;
