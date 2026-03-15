@@ -2,12 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -16,6 +17,8 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CharacterAvatar } from "@/components/CharacterAvatar";
 import { ChatInput } from "@/components/ChatInput";
+import { CreateCharacterModal } from "@/components/CreateCharacterModal";
+import { MessageActionSheet } from "@/components/MessageActionSheet";
 import { MessageBubble } from "@/components/MessageBubble";
 import { ModeSelector } from "@/components/ModeSelector";
 import { TypingIndicator } from "@/components/TypingIndicator";
@@ -34,6 +37,11 @@ import {
   getMemory,
   saveMemory,
 } from "@/services/memoryService";
+import {
+  CustomCharacter,
+  deleteCustomCharacter,
+  getCustomCharacters,
+} from "@/services/customCharacterService";
 
 type ChatMode = "select" | "individual" | "group";
 
@@ -49,6 +57,15 @@ export default function ChatScreen() {
   const [mode, setMode] = useState<ConversationMode>("mixed");
   const initializedRef = useRef(false);
 
+  const [actionSheetMsg, setActionSheetMsg] = useState<Message | null>(null);
+  const [actionSheetVisible, setActionSheetVisible] = useState(false);
+
+  const [createCharVisible, setCreateCharVisible] = useState(false);
+  const [customChars, setCustomChars] = useState<CustomCharacter[]>([]);
+
+  const [editPrefill, setEditPrefill] = useState<string | undefined>(undefined);
+  const [editMode, setEditMode] = useState(false);
+
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const botInset = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -56,6 +73,20 @@ export default function ChatScreen() {
     chatMode === "group"
       ? COLORS.accent
       : selectedChar?.color ?? COLORS.accent;
+
+  const customCharMap: Record<string, CustomCharacter> = {};
+  for (const c of customChars) {
+    customCharMap[c.id] = c;
+  }
+
+  useEffect(() => {
+    loadCustomChars();
+  }, []);
+
+  const loadCustomChars = async () => {
+    const chars = await getCustomCharacters();
+    setCustomChars(chars);
+  };
 
   const handleSelectChar = (char: Character) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -82,11 +113,78 @@ export default function ChatScreen() {
     setSelectedChar(null);
     setGroupActive(false);
     initializedRef.current = false;
+    setEditMode(false);
+    setEditPrefill(undefined);
+  };
+
+  const handleLongPressMessage = (msg: Message) => {
+    if (isStreaming) return;
+    setActionSheetMsg(msg);
+    setActionSheetVisible(true);
+  };
+
+  const handleDeleteMessage = (msg: Message) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msg.id);
+      if (idx < 0) return prev;
+      if (msg.role === "user") {
+        const next = prev[idx + 1];
+        if (next && next.role === "assistant") {
+          return [...prev.slice(0, idx), ...prev.slice(idx + 2)];
+        }
+      }
+      return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+    });
+  };
+
+  const handleRewindMessage = (msg: Message) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msg.id);
+      if (idx < 0) return prev;
+      return prev.slice(0, idx + 1);
+    });
+  };
+
+  const handleEditMessage = (msg: Message) => {
+    if (msg.role !== "user") return;
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msg.id);
+      if (idx < 0) return prev;
+      return prev.slice(0, idx);
+    });
+    setEditPrefill(msg.content);
+    setEditMode(true);
+  };
+
+  const handleCancelEdit = () => {
+    setEditMode(false);
+    setEditPrefill(undefined);
+  };
+
+  const handleDeleteCustomChar = (char: CustomCharacter) => {
+    Alert.alert(
+      "حذف الشخصية",
+      `هل تريدين حذف "${char.name}"؟`,
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "حذف",
+          style: "destructive",
+          onPress: async () => {
+            await deleteCustomCharacter(char.id);
+            await loadCustomChars();
+          },
+        },
+      ]
+    );
   };
 
   const handleSend = useCallback(
     async (text: string) => {
       if (isStreaming) return;
+
+      setEditMode(false);
+      setEditPrefill(undefined);
 
       const currentMessages = [...messages];
       const userMsg: Message = {
@@ -216,7 +314,6 @@ export default function ChatScreen() {
           console.error(err);
           setIsStreaming(false);
           setShowTyping(false);
-          setShowTyping(false);
           if (!assistantAdded) {
             setMessages((prev) => [
               ...prev,
@@ -245,15 +342,28 @@ export default function ChatScreen() {
       >
         <View style={styles.selectHeader}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.selectTitle}>Characters</Text>
-            <Text style={styles.selectSub}>Choose who to talk with</Text>
+            <Text style={styles.selectTitle}>الشخصيات</Text>
+            <Text style={styles.selectSub}>اختاري مع من تتحدثين</Text>
           </View>
           <Pressable
+            onPress={() => setCreateCharVisible(true)}
+            hitSlop={10}
+            style={({ pressed }) => [styles.addBtn, { opacity: pressed ? 0.7 : 1 }]}
+          >
+            <LinearGradient
+              colors={[`${COLORS.accent}22`, `${COLORS.accent}11`]}
+              style={styles.addBtnGradient}
+            >
+              <Ionicons name="person-add" size={16} color={COLORS.accent} />
+              <Text style={styles.addBtnText}>إنشاء</Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable
             onPress={() =>
-              Alert.alert("Replay Intro", "Replay the intro sequence?", [
-                { text: "Cancel", style: "cancel" },
+              Alert.alert("إعادة المقدمة", "هل تريدين مشاهدة المقدمة مرة أخرى؟", [
+                { text: "إلغاء", style: "cancel" },
                 {
-                  text: "Replay",
+                  text: "نعم",
                   onPress: async () => {
                     await resetIntro();
                     router.replace("/intro");
@@ -264,11 +374,14 @@ export default function ChatScreen() {
             hitSlop={10}
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
           >
-            <Ionicons name="refresh-circle-outline" size={26} color={`${COLORS.accent}88`} />
+            <Ionicons name="refresh-circle-outline" size={26} color={`${COLORS.accent}66`} />
           </Pressable>
         </View>
 
-        <View style={styles.characterGrid}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.characterGrid}
+        >
           {CHARACTER_LIST.map((char) => (
             <Pressable
               key={char.id}
@@ -299,6 +412,53 @@ export default function ChatScreen() {
               />
             </Pressable>
           ))}
+
+          {customChars.length > 0 && (
+            <>
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionLabel}>شخصياتك</Text>
+                <View style={styles.sectionLine} />
+              </View>
+              {customChars.map((char) => (
+                <Pressable
+                  key={char.id}
+                  onPress={() => handleSelectChar(char)}
+                  onLongPress={() => handleDeleteCustomChar(char)}
+                  delayLongPress={600}
+                  style={({ pressed }) => [
+                    styles.characterCard,
+                    {
+                      borderColor: `${char.color}44`,
+                      backgroundColor: `${char.color}0D`,
+                      opacity: pressed ? 0.85 : 1,
+                      transform: [{ scale: pressed ? 0.97 : 1 }],
+                    },
+                  ]}
+                >
+                  <CharacterAvatar character={char} size={52} />
+                  <View style={styles.cardInfo}>
+                    <View style={styles.cardNameRow}>
+                      <Text style={[styles.cardName, { color: char.color }]}>
+                        {char.name}
+                      </Text>
+                      <View style={[styles.customBadge, { backgroundColor: `${char.color}22`, borderColor: `${char.color}44` }]}>
+                        <Text style={[styles.customBadgeText, { color: char.color }]}>مخصص</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.cardPersonality} numberOfLines={2}>
+                      {char.personality}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={`${char.color}66`}
+                  />
+                </Pressable>
+              ))}
+            </>
+          )}
 
           <Pressable
             onPress={handleGroupChat}
@@ -333,20 +493,54 @@ export default function ChatScreen() {
                 </View>
               </View>
               <View style={styles.groupCardInfo}>
-                <Text style={styles.groupCardName}>Group Chat</Text>
-                <Text style={styles.groupCardSub}>All 5 characters together</Text>
+                <Text style={styles.groupCardName}>دردشة جماعية</Text>
+                <Text style={styles.groupCardSub}>جميع الشخصيات معاً</Text>
               </View>
               <Ionicons name="people" size={20} color={COLORS.accent} />
             </LinearGradient>
           </Pressable>
-        </View>
+
+          <Pressable
+            onPress={() => setCreateCharVisible(true)}
+            style={({ pressed }) => [
+              styles.createCharCard,
+              {
+                opacity: pressed ? 0.85 : 1,
+                transform: [{ scale: pressed ? 0.97 : 1 }],
+              },
+            ]}
+          >
+            <LinearGradient
+              colors={[`${COLORS.accent}18`, `${COLORS.accent}08`]}
+              style={styles.createCharGradient}
+            >
+              <View style={styles.createCharIcon}>
+                <Ionicons name="add" size={24} color={COLORS.accent} />
+              </View>
+              <View style={styles.createCharInfo}>
+                <Text style={styles.createCharTitle}>إنشاء شخصية</Text>
+                <Text style={styles.createCharSub}>أضيفي شخصيتك المفضلة</Text>
+              </View>
+              <Ionicons name="sparkles" size={18} color={`${COLORS.accent}88`} />
+            </LinearGradient>
+          </Pressable>
+        </ScrollView>
+
+        <CreateCharacterModal
+          visible={createCharVisible}
+          onClose={() => setCreateCharVisible(false)}
+          onCreated={async (char) => {
+            setCreateCharVisible(false);
+            await loadCustomChars();
+          }}
+        />
       </LinearGradient>
     );
   }
 
   const headerTitle =
     chatMode === "group"
-      ? "Group Chat"
+      ? "دردشة جماعية"
       : selectedChar?.name ?? "Chat";
   const headerColor = accentColor;
 
@@ -389,7 +583,26 @@ export default function ChatScreen() {
           </Text>
         </View>
 
-        <View style={styles.headerRight} />
+        <View style={styles.headerRight}>
+          {messages.length > 0 && !isStreaming && (
+            <Pressable
+              onPress={() =>
+                Alert.alert("مسح المحادثة", "هل تريدين مسح كل الرسائل؟", [
+                  { text: "إلغاء", style: "cancel" },
+                  {
+                    text: "مسح",
+                    style: "destructive",
+                    onPress: () => setMessages([]),
+                  },
+                ])
+              }
+              hitSlop={10}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+              <Ionicons name="trash-outline" size={20} color={`${COLORS.textMuted}`} />
+            </Pressable>
+          )}
+        </View>
       </LinearGradient>
 
       <ModeSelector selected={mode} onSelect={setMode} />
@@ -401,6 +614,9 @@ export default function ChatScreen() {
           <MessageBubble
             message={item}
             showCharacterName={chatMode === "group"}
+            isSelected={actionSheetMsg?.id === item.id && actionSheetVisible}
+            onLongPress={handleLongPressMessage}
+            customCharacters={customCharMap}
           />
         )}
         inverted={messages.length > 0}
@@ -422,8 +638,11 @@ export default function ChatScreen() {
               )}
               <Text style={[styles.emptyText, { color: accentColor }]}>
                 {chatMode === "group"
-                  ? "Start a group conversation"
-                  : `Start chatting with ${selectedChar?.name}`}
+                  ? "ابدئي المحادثة الجماعية"
+                  : `ابدئي التحدث مع ${selectedChar?.name}`}
+              </Text>
+              <Text style={styles.emptyHint}>
+                اضغطي مطولاً على أي رسالة لتعديلها أو حذفها
               </Text>
             </View>
           ) : null
@@ -435,8 +654,24 @@ export default function ChatScreen() {
           onSend={handleSend}
           disabled={isStreaming}
           accentColor={accentColor}
+          prefillText={editPrefill}
+          editMode={editMode}
+          onCancelEdit={handleCancelEdit}
         />
       </View>
+
+      <MessageActionSheet
+        message={actionSheetMsg}
+        visible={actionSheetVisible}
+        onClose={() => {
+          setActionSheetVisible(false);
+          setActionSheetMsg(null);
+        }}
+        onDelete={handleDeleteMessage}
+        onEdit={handleEditMessage}
+        onRewind={handleRewindMessage}
+        accentColor={accentColor}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -446,15 +681,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   selectHeader: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 8,
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
   },
   selectTitle: {
     fontFamily: "Inter_700Bold",
-    fontSize: 30,
+    fontSize: 28,
     color: COLORS.textPrimary,
     letterSpacing: -0.5,
   },
@@ -463,9 +699,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textSecondary,
   },
+  addBtn: {
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  addBtnGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${COLORS.accent}33`,
+  },
+  addBtnText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+    color: COLORS.accent,
+  },
   characterGrid: {
     padding: 16,
     gap: 10,
+    paddingBottom: 32,
   },
   characterCard: {
     flexDirection: "row",
@@ -479,15 +735,48 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 3,
   },
+  cardNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   cardName: {
     fontFamily: "Inter_600SemiBold",
     fontSize: 16,
+  },
+  customBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+  },
+  customBadgeText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 9,
+    letterSpacing: 0.3,
   },
   cardPersonality: {
     fontFamily: "Inter_400Regular",
     fontSize: 12,
     color: COLORS.textSecondary,
     lineHeight: 17,
+  },
+  sectionDivider: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginVertical: 4,
+  },
+  sectionLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: COLORS.border,
+  },
+  sectionLabel: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    color: COLORS.textMuted,
+    letterSpacing: 0.5,
   },
   groupCard: {
     borderRadius: 18,
@@ -540,6 +829,43 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textSecondary,
   },
+  createCharCard: {
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: `${COLORS.accent}33`,
+    borderStyle: "dashed",
+    marginTop: 4,
+  },
+  createCharGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    gap: 12,
+  },
+  createCharIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: `${COLORS.accent}18`,
+    borderWidth: 1,
+    borderColor: `${COLORS.accent}33`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  createCharInfo: {
+    flex: 1,
+  },
+  createCharTitle: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 16,
+    color: COLORS.accent,
+  },
+  createCharSub: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12,
+    color: COLORS.textSecondary,
+  },
   chatHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -570,6 +896,8 @@ const styles = StyleSheet.create({
   },
   headerRight: {
     width: 36,
+    alignItems: "center",
+    justifyContent: "center",
   },
   groupHeaderAvatars: {
     flexDirection: "row",
@@ -594,12 +922,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 60,
-    gap: 16,
+    gap: 14,
   },
   emptyText: {
     fontFamily: "Inter_500Medium",
     fontSize: 15,
     textAlign: "center",
     paddingHorizontal: 32,
+  },
+  emptyHint: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12,
+    color: COLORS.textMuted,
+    textAlign: "center",
+    paddingHorizontal: 40,
   },
 });

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { ResizeMode, Video } from "expo-av";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import React, { useRef, useState } from "react";
@@ -92,21 +92,23 @@ function ImageStep({ onNext }: { onNext: () => void }) {
 }
 
 function VideoStep({ onNext }: { onNext: () => void }) {
-  const videoRef = useRef<Video>(null);
+  const player = useVideoPlayer(require("@/assets/videos/intro.mp4"), (p) => {
+    p.loop = true;
+    p.muted = false;
+    p.play();
+  });
 
   return (
     <View style={styles.stepContainer}>
       <View style={styles.videoSection}>
         <View style={styles.videoWrapper}>
-          <Video
-            ref={videoRef}
-            source={require("@/assets/videos/intro.mp4")}
+          <VideoView
+            player={player}
             style={styles.video}
-            resizeMode={ResizeMode.COVER}
-            shouldPlay
-            isLooping
-            isMuted={false}
-            useNativeControls={false}
+            contentFit="cover"
+            nativeControls={false}
+            allowsFullscreen={false}
+            allowsPictureInPicture={false}
           />
           <LinearGradient
             colors={["transparent", `${COLORS.bgDeep}77`, COLORS.bgDeep]}
@@ -115,7 +117,7 @@ function VideoStep({ onNext }: { onNext: () => void }) {
         </View>
       </View>
 
-      <NextButton label="Next" onPress={onNext} />
+      <NextButton label="التالي" onPress={onNext} />
     </View>
   );
 }

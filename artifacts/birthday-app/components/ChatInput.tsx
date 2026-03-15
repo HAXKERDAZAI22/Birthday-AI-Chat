@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Pressable,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from "react-native";
@@ -13,15 +14,28 @@ interface ChatInputProps {
   onSend: (text: string) => void;
   disabled?: boolean;
   accentColor?: string;
+  prefillText?: string;
+  editMode?: boolean;
+  onCancelEdit?: () => void;
 }
 
 export function ChatInput({
   onSend,
   disabled = false,
   accentColor = COLORS.accent,
+  prefillText,
+  editMode = false,
+  onCancelEdit,
 }: ChatInputProps) {
   const [text, setText] = useState("");
   const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (prefillText !== undefined) {
+      setText(prefillText);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [prefillText]);
 
   const handleSend = () => {
     const trimmed = text.trim();
@@ -36,13 +50,27 @@ export function ChatInput({
 
   return (
     <View style={styles.container}>
-      <View style={[styles.inputRow, { borderColor: COLORS.borderSoft }]}>
+      {editMode && (
+        <View style={styles.editBanner}>
+          <Ionicons name="pencil" size={13} color={accentColor} />
+          <Text style={[styles.editBannerText, { color: accentColor }]}>
+            تعديل الرسالة
+          </Text>
+          <Pressable onPress={onCancelEdit} hitSlop={10}>
+            <Ionicons name="close-circle" size={18} color={`${accentColor}99`} />
+          </Pressable>
+        </View>
+      )}
+      <View style={[
+        styles.inputRow,
+        { borderColor: editMode ? `${accentColor}55` : COLORS.borderSoft },
+      ]}>
         <TextInput
           ref={inputRef}
           style={styles.input}
           value={text}
           onChangeText={setText}
-          placeholder="Say something..."
+          placeholder="اكتبي شيئاً..."
           placeholderTextColor={COLORS.textMuted}
           multiline
           maxLength={500}
@@ -63,7 +91,7 @@ export function ChatInput({
           ]}
         >
           <Ionicons
-            name="arrow-up"
+            name={editMode ? "checkmark" : "arrow-up"}
             size={18}
             color={canSend ? COLORS.bg : COLORS.textMuted}
           />
@@ -77,6 +105,18 @@ const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  editBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 6,
+    paddingBottom: 6,
+  },
+  editBannerText: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    flex: 1,
   },
   inputRow: {
     flexDirection: "row",
