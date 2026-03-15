@@ -35,6 +35,12 @@ import {
   streamGroupChatResponse,
 } from "@/services/aiService";
 import {
+  saveConversation,
+  loadConversation,
+  clearAllConversations,
+  clearConversation,
+} from "@/services/conversationService";
+import {
   buildMemoryContext,
   getMemory,
   saveMemory,
@@ -69,6 +75,8 @@ export default function ChatScreen() {
   const [editPrefill, setEditPrefill] = useState<string | undefined>(undefined);
   const [editMode, setEditMode] = useState(false);
 
+  const activeCharIdRef = useRef<string | null>(null);
+
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const botInset = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -91,24 +99,29 @@ export default function ChatScreen() {
     setCustomChars(chars);
   };
 
-  const handleSelectChar = (char: Character) => {
+  const handleSelectChar = async (char: Character) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    activeCharIdRef.current = char.id;
+    const saved = await loadConversation(char.id);
     setSelectedChar(char);
-    setMessages([]);
-    initializedRef.current = false;
+    setMessages(saved);
+    initializedRef.current = saved.length > 0;
     setChatMode("individual");
   };
 
-  const handleGroupChat = () => {
+  const handleGroupChat = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    activeCharIdRef.current = "group";
+    const saved = await loadConversation("group");
     setGroupActive(true);
     setSelectedChar(null);
-    setMessages([]);
-    initializedRef.current = false;
+    setMessages(saved);
+    initializedRef.current = saved.length > 0;
     setChatMode("group");
   };
 
   const handleBack = () => {
+    activeCharIdRef.current = null;
     setMessages([]);
     setIsStreaming(false);
     setShowTyping(false);
@@ -118,6 +131,27 @@ export default function ChatScreen() {
     initializedRef.current = false;
     setEditMode(false);
     setEditPrefill(undefined);
+  };
+
+  const handleResetAllData = () => {
+    Alert.alert(
+      "مسح كل البيانات",
+      "سيتم حذف كل المحادثات والشخصيات المُضافة. هل أنتِ متأكدة؟",
+      [
+        { text: "إلغاء", style: "cancel" },
+        {
+          text: "مسح الكل",
+          style: "destructive",
+          onPress: async () => {
+            await clearAllConversations();
+            const { clearAllCustomCharacters } = await import("@/services/customCharacterService");
+            await clearAllCustomCharacters();
+            await loadCustomChars();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          },
+        },
+      ]
+    );
   };
 
   const handleLongPressMessage = (msg: Message) => {
