@@ -1,27 +1,27 @@
 {
   "name": "@workspace/api-server",
   "version": "0.0.0",
-  "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "NODE_ENV=development tsx ./src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsx ./build.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@workspace/db": "workspace:*",
-    "@workspace/api-zod": "workspace:*",
-    "drizzle-orm": "catalog:",
-    "express": "^5",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2"
+    "@neondatabase/serverless": "^0.9.0",
+    "drizzle-orm": "^0.45.1",
+    "@workspace/api-zod": "0.0.0",
+    "@workspace/db": "0.0.0",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.6",
+    "express": "5.2.1"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "@types/express": "^5.0.6",
-    "@types/cors": "^2.8.19",
-    "@types/cookie-parser": "^1.4.10",
-    "esbuild": "^0.27.3",
-    "tsx": "catalog:"
+    "@types/cookie-parser": "1.4.10",
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "25.3.5",
+    "esbuild": "0.27.3",
+    "tsx": "4.21.0"
   }
 }
