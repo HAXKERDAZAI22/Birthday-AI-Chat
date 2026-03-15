@@ -6,10 +6,10 @@ import COLORS from "@/constants/colors";
 import { ConversationMode } from "@/services/aiService";
 
 const MODES: { id: ConversationMode; label: string; icon: keyof typeof Ionicons.glyphMap; color: string }[] = [
-  { id: "romantic", label: "Romantic", icon: "heart", color: "#E8A4C8" },
-  { id: "caring", label: "Caring", icon: "hand-left", color: "#7EC8E3" },
-  { id: "funny", label: "Funny", icon: "happy", color: "#E8B86D" },
-  { id: "mixed", label: "Mixed", icon: "sparkles", color: "#8B9DC3" },
+  { id: "romantic", label: "رومانسي",  icon: "heart",     color: "#E8A4C8" },
+  { id: "caring",   label: "حنون",     icon: "hand-left", color: "#7EC8E3" },
+  { id: "funny",    label: "مرح",      icon: "happy",     color: "#E8B86D" },
+  { id: "mixed",    label: "طبيعي",    icon: "sparkles",  color: "#8B9DC3" },
 ];
 
 interface ModeSelectorProps {

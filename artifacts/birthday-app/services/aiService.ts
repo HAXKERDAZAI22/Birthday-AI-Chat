@@ -13,6 +13,7 @@ export interface ChatRequest {
   messages: { role: string; content: string }[];
   characterId: string;
   mode: ConversationMode;
+  responseLength?: ResponseLength;
   memory?: string;
   isGroup?: boolean;
   characters?: string[];
@@ -20,6 +21,7 @@ export interface ChatRequest {
 }
 
 export type ConversationMode = "romantic" | "caring" | "funny" | "mixed";
+export type ResponseLength = "short" | "medium" | "long";
 
 let msgCounter = 0;
 export function generateMsgId(): string {

@@ -54,7 +54,8 @@ export function MessageBubble({
     : null;
   const charColor = character?.color ?? COLORS.accent;
 
-  const parts = isUser ? null : parseContent(message.content);
+  const parts = parseContent(message.content);
+  const hasAction = parts.some((p) => p.type === "action");
 
   const handleLongPress = () => {
     if (onLongPress) {
@@ -95,7 +96,13 @@ export function MessageBubble({
 
         {isUser ? (
           <View style={[styles.userBubble, isSelected && styles.userBubbleSelected]}>
-            <Text style={styles.userText}>{message.content}</Text>
+            {parts.map((part, i) =>
+              part.type === "action" ? (
+                <UserActionLine key={i} text={part.text} />
+              ) : (
+                <Text key={i} style={styles.userText}>{part.text}</Text>
+              )
+            )}
             <Text style={styles.timeStampUser}>{time}</Text>
           </View>
         ) : (
@@ -106,13 +113,11 @@ export function MessageBubble({
               isSelected && { borderColor: `${charColor}55`, borderLeftColor: charColor },
             ]}
           >
-            {parts?.map((part, i) =>
+            {parts.map((part, i) =>
               part.type === "action" ? (
-                <ActionLine key={i} text={part.text} color={charColor} />
+                <BotActionLine key={i} text={part.text} color={charColor} />
               ) : (
-                <Text key={i} style={styles.dialogueText}>
-                  {part.text}
-                </Text>
+                <Text key={i} style={styles.dialogueText}>{part.text}</Text>
               )
             )}
             <Text style={[styles.timeStampAssistant, { color: `${charColor}55` }]}>{time}</Text>
@@ -120,10 +125,10 @@ export function MessageBubble({
         )}
 
         {isSelected && (
-          <View style={styles.selectedBadge}>
-            <Ionicons name="checkmark-circle" size={14} color={isUser ? COLORS.accent : charColor} />
+          <View style={[styles.selectedBadge, isUser && styles.selectedBadgeUser]}>
+            <Ionicons name="hand-left" size={11} color={isUser ? COLORS.accent : charColor} />
             <Text style={[styles.selectedBadgeText, { color: isUser ? COLORS.accent : charColor }]}>
-              اضغطي لرؤية الخيارات
+              اضغطي مطولاً للخيارات
             </Text>
           </View>
         )}
@@ -132,12 +137,21 @@ export function MessageBubble({
   );
 }
 
-function ActionLine({ text, color }: { text: string; color: string }) {
+function UserActionLine({ text }: { text: string }) {
   return (
-    <View style={[styles.actionRow, { borderColor: `${color}25`, backgroundColor: `${color}0D` }]}>
+    <View style={styles.userActionRow}>
+      <Ionicons name="sparkles" size={10} color={`${COLORS.bg}99`} style={{ marginTop: 1 }} />
+      <Text style={styles.userActionText}>{text}</Text>
+    </View>
+  );
+}
+
+function BotActionLine({ text, color }: { text: string; color: string }) {
+  return (
+    <View style={[styles.botActionRow, { borderColor: `${color}25`, backgroundColor: `${color}0D` }]}>
       <View style={[styles.actionAccent, { backgroundColor: `${color}66` }]} />
       <Ionicons name="sparkles" size={11} color={`${color}88`} style={styles.actionIcon} />
-      <Text style={[styles.actionText, { color: `${color}CC` }]}>{text}</Text>
+      <Text style={[styles.botActionText, { color: `${color}CC` }]}>{text}</Text>
     </View>
   );
 }
@@ -150,47 +164,30 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: 8,
   },
-  rowUser: {
-    justifyContent: "flex-end",
-  },
-  rowAssistant: {
-    justifyContent: "flex-start",
-  },
+  rowUser: { justifyContent: "flex-end" },
+  rowAssistant: { justifyContent: "flex-start" },
   rowSelected: {
     backgroundColor: `${COLORS.accent}08`,
     borderRadius: 16,
     marginHorizontal: 4,
   },
-  avatarWrap: {
-    marginBottom: 2,
-    flexShrink: 0,
-  },
+  avatarWrap: { marginBottom: 2, flexShrink: 0 },
   characterDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    borderWidth: 1,
-    marginBottom: 10,
-    flexShrink: 0,
+    width: 8, height: 8, borderRadius: 4,
+    borderWidth: 1, marginBottom: 10, flexShrink: 0,
   },
-  bubbleWrapper: {
-    maxWidth: "82%",
-    gap: 3,
-  },
-  bubbleWrapperUser: {
-    alignItems: "flex-end",
-  },
-  bubbleWrapperAssistant: {
-    alignItems: "flex-start",
-  },
+  bubbleWrapper: { maxWidth: "82%", gap: 3 },
+  bubbleWrapperUser: { alignItems: "flex-end" },
+  bubbleWrapperAssistant: { alignItems: "flex-start" },
   charName: {
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "Inter_600SemiBold",
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
     marginLeft: 6,
     marginBottom: 2,
     textTransform: "uppercase",
   },
+
   userBubble: {
     backgroundColor: COLORS.accent,
     borderRadius: 22,
@@ -198,6 +195,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     paddingBottom: 8,
+    gap: 5,
     shadowColor: COLORS.accent,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -215,6 +213,24 @@ const styles = StyleSheet.create({
     color: COLORS.bg,
     lineHeight: 22,
   },
+  userActionRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 5,
+    backgroundColor: `${COLORS.bg}18`,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  userActionText: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12.5,
+    fontStyle: "italic",
+    color: `${COLORS.bg}DD`,
+    lineHeight: 18,
+    flex: 1,
+  },
+
   assistantBubble: {
     backgroundColor: COLORS.bgCard,
     borderRadius: 22,
@@ -232,7 +248,7 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     lineHeight: 23,
   },
-  actionRow: {
+  botActionRow: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 10,
@@ -244,27 +260,26 @@ const styles = StyleSheet.create({
   },
   actionAccent: {
     width: 2.5,
-    height: "100%",
+    alignSelf: "stretch",
     borderRadius: 2,
     minHeight: 16,
     flexShrink: 0,
   },
-  actionIcon: {
-    flexShrink: 0,
-  },
-  actionText: {
+  actionIcon: { flexShrink: 0 },
+  botActionText: {
     fontFamily: "Inter_400Regular",
     fontSize: 13,
     fontStyle: "italic",
     lineHeight: 19,
     flex: 1,
   },
+
   timeStampUser: {
     fontFamily: "Inter_400Regular",
     fontSize: 10,
-    color: `${COLORS.bg}80`,
+    color: `${COLORS.bg}70`,
     textAlign: "right",
-    marginTop: 3,
+    marginTop: 2,
   },
   timeStampAssistant: {
     fontFamily: "Inter_400Regular",
@@ -279,6 +294,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginTop: 2,
   },
+  selectedBadgeUser: { justifyContent: "flex-end" },
   selectedBadgeText: {
     fontFamily: "Inter_400Regular",
     fontSize: 10,

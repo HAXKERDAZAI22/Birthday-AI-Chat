@@ -15,24 +15,47 @@ const OPENROUTER_API_KEY =
 const MODEL = "deepseek/deepseek-chat-v3-0324";
 
 type ConversationMode = "romantic" | "caring" | "funny" | "mixed";
+type ResponseLength = "short" | "medium" | "long";
 
 function getModeInstruction(mode: ConversationMode): string {
   switch (mode) {
     case "romantic":
-      return "\n\nConversation mode: Romantic. Be affectionate, warm, tender, and deeply caring. Express gentle feelings naturally.";
+      return "Conversation mode: Romantic. Be deeply affectionate, tender, warm. Express feelings naturally and gently.";
     case "caring":
-      return "\n\nConversation mode: Caring. Be supportive, understanding, nurturing, and emotionally present.";
+      return "Conversation mode: Caring. Be supportive, nurturing, emotionally present and understanding.";
     case "funny":
-      return "\n\nConversation mode: Funny. Be playful, witty, tease gently, make jokes in character.";
+      return "Conversation mode: Funny. Be playful, witty, tease gently and make the user smile.";
     case "mixed":
-      return "\n\nConversation mode: Mixed. Balance all moods naturally — caring, playful, warm, and real.";
+      return "Conversation mode: Natural. Balance all emotions — caring, warm, playful and real. React authentically.";
   }
 }
+
+function getLengthInstruction(length: ResponseLength): string {
+  switch (length) {
+    case "short":
+      return "Response length: SHORT. Reply in 1-2 sentences only. Be concise and impactful.";
+    case "medium":
+      return "Response length: MEDIUM. Reply in 2-4 sentences. One action + meaningful dialogue.";
+    case "long":
+      return "Response length: LONG. Write a rich, immersive response with 2-3 actions and detailed emotional dialogue.";
+  }
+}
+
+const ACTIONS_INSTRUCTION = `
+CRITICAL RULE — Action system:
+- When the user writes something between *asterisks* like *smiles at you* or *hugs you*, this is a roleplay action they are performing. You MUST:
+  1. Acknowledge that action naturally in your response
+  2. React to it in character — physically, emotionally or verbally
+  3. You may also perform a *returning action* between asterisks in your reply
+- Never ignore user actions. They are real gestures in the story.
+- Your own actions go between *asterisks* as well
+- Keep the immersion alive and make the user feel seen and responded to`;
 
 interface ChatRequestBody {
   messages: { role: string; content: string }[];
   characterId: string;
   mode: ConversationMode;
+  responseLength?: ResponseLength;
   memory?: string;
   isGroup?: boolean;
   characters?: string[];
@@ -42,7 +65,7 @@ interface ChatRequestBody {
 async function callOpenRouter(
   messages: { role: string; content: string }[],
   stream: boolean,
-  maxTokens: number = 600
+  maxTokens: number = 400
 ) {
   return fetch(OPENROUTER_BASE_URL, {
     method: "POST",
@@ -63,9 +86,17 @@ async function callOpenRouter(
   });
 }
 
+function getMaxTokens(length: ResponseLength = "medium"): number {
+  switch (length) {
+    case "short":  return 150;
+    case "medium": return 400;
+    case "long":   return 800;
+  }
+}
+
 router.post("/chat", async (req: Request, res: Response) => {
   const body = req.body as ChatRequestBody;
-  const { messages, characterId, mode, memory, systemPrompt: customSystemPrompt } = body;
+  const { messages, characterId, mode, responseLength = "medium", memory, systemPrompt: customSystemPrompt } = body;
 
   const character = CHARACTERS[characterId];
   const basePrompt = customSystemPrompt || character?.systemPrompt;
@@ -76,7 +107,14 @@ router.post("/chat", async (req: Request, res: Response) => {
   }
 
   const modeInstruction = getModeInstruction(mode);
-  const systemContent = `${basePrompt}${modeInstruction}${memory ? `\n\n${memory}` : ""}`;
+  const lengthInstruction = getLengthInstruction(responseLength);
+  const systemContent = [
+    basePrompt,
+    ACTIONS_INSTRUCTION,
+    `\n${modeInstruction}`,
+    `\n${lengthInstruction}`,
+    memory ? `\n${memory}` : "",
+  ].join("\n");
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -87,7 +125,7 @@ router.post("/chat", async (req: Request, res: Response) => {
     const openRouterRes = await callOpenRouter(
       [{ role: "system", content: systemContent }, ...messages],
       true,
-      600
+      getMaxTokens(responseLength)
     );
 
     if (!openRouterRes.ok) {
@@ -141,7 +179,7 @@ router.post("/chat", async (req: Request, res: Response) => {
 
 router.post("/group-chat", async (req: Request, res: Response) => {
   const body = req.body as ChatRequestBody;
-  const { messages, mode, characters = Object.keys(CHARACTERS) } = body;
+  const { messages, mode, responseLength = "medium", characters = Object.keys(CHARACTERS) } = body;
 
   const modeInstruction = getModeInstruction(mode);
   const results: { characterId: string; text: string }[] = [];
@@ -150,13 +188,19 @@ router.post("/group-chat", async (req: Request, res: Response) => {
     const character = CHARACTERS[charId];
     if (!character) continue;
 
-    const systemContent = `${character.systemPrompt}${modeInstruction}\n\nThis is a group conversation. Respond in character with 1-2 sentences only. Be concise and immersive. Use the *action* format only if needed.`;
+    const systemContent = [
+      character.systemPrompt,
+      ACTIONS_INSTRUCTION,
+      `\n${modeInstruction}`,
+      "\nResponse length: SHORT — this is a group chat. Reply in 1-2 sentences only.",
+      "\nThis is a group conversation. Be concise and in-character.",
+    ].join("\n");
 
     try {
       const openRouterRes = await callOpenRouter(
         [{ role: "system", content: systemContent }, ...messages],
         false,
-        160
+        140
       );
 
       if (!openRouterRes.ok) {
@@ -185,24 +229,24 @@ router.post("/generate-character", async (req: Request, res: Response) => {
     return;
   }
 
-  const prompt = `You are a character designer AI. A user wants to create a custom AI character for roleplay conversations.
+  const prompt = `You are a character designer. Create a system prompt for an AI roleplay character.
 
-Character Name: ${name}
-User Description: ${description}
+Name: ${name}
+Description: ${description}
 
-Generate a detailed system prompt for this character that:
-1. Defines their exact personality traits and speech patterns
-2. Specifies how they act in romantic, caring, playful, and serious situations
-3. Describes their quirks and unique mannerisms
-4. Uses *asterisks* to denote physical actions in conversation
-5. Makes them feel real, immersive and emotionally engaging
+The system prompt must:
+1. Define personality, speech style, quirks
+2. Include the *asterisk action* rule
+3. Include the user-action response rule (react to user's *actions*)
+4. Make them emotionally immersive and realistic
+5. Use Arabic or English naturally based on context
 
-Respond with ONLY the system prompt text, nothing else.`;
+Reply with ONLY the system prompt text.`;
 
   try {
     const openRouterRes = await callOpenRouter(
       [
-        { role: "system", content: "You are an expert at creating immersive AI character system prompts for roleplay." },
+        { role: "system", content: "You are an expert at writing immersive AI character system prompts." },
         { role: "user", content: prompt },
       ],
       false,
@@ -210,8 +254,7 @@ Respond with ONLY the system prompt text, nothing else.`;
     );
 
     if (!openRouterRes.ok) {
-      const fallback = buildFallbackPrompt(name, description);
-      res.json({ systemPrompt: fallback });
+      res.json({ systemPrompt: buildFallbackPrompt(name, description) });
       return;
     }
 
@@ -220,8 +263,7 @@ Respond with ONLY the system prompt text, nothing else.`;
     };
     const systemPrompt = data.choices?.[0]?.message?.content ?? buildFallbackPrompt(name, description);
     res.json({ systemPrompt });
-  } catch (err) {
-    console.error("generate-character error:", err);
+  } catch {
     res.json({ systemPrompt: buildFallbackPrompt(name, description) });
   }
 });
@@ -231,11 +273,10 @@ function buildFallbackPrompt(name: string, description: string): string {
 
 Rules:
 - Stay in character as ${name} at all times
-- Place all physical actions between *asterisks* like *smiles softly*
+- Write your own physical actions between *asterisks* like *smiles warmly*
+- When the user writes an action between *asterisks*, react to it naturally and in character
 - Dialogue goes outside asterisks
-- Be immersive and emotionally engaging
-- Stay true to the personality described
-- Vary your responses and never repeat the same opening line`;
+- Be immersive, emotionally present, and never repeat the same opening`;
 }
 
 export default router;

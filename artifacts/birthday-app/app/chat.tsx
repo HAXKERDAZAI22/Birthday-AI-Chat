@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CharacterAvatar } from "@/components/CharacterAvatar";
 import { ChatInput } from "@/components/ChatInput";
 import { CreateCharacterModal } from "@/components/CreateCharacterModal";
+import { LengthSelector } from "@/components/LengthSelector";
 import { MessageActionSheet } from "@/components/MessageActionSheet";
 import { MessageBubble } from "@/components/MessageBubble";
 import { ModeSelector } from "@/components/ModeSelector";
@@ -27,6 +28,7 @@ import COLORS from "@/constants/colors";
 import { useApp } from "@/context/AppContext";
 import {
   ConversationMode,
+  ResponseLength,
   Message,
   generateMsgId,
   streamChatResponse,
@@ -55,6 +57,7 @@ export default function ChatScreen() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [showTyping, setShowTyping] = useState(false);
   const [mode, setMode] = useState<ConversationMode>("mixed");
+  const [responseLength, setResponseLength] = useState<ResponseLength>("medium");
   const initializedRef = useRef(false);
 
   const [actionSheetMsg, setActionSheetMsg] = useState<Message | null>(null);
@@ -207,6 +210,7 @@ export default function ChatScreen() {
             ],
             characterId: "group",
             mode,
+            responseLength,
             isGroup: true,
             characters: Object.keys(CHARACTERS),
           },
@@ -262,6 +266,7 @@ export default function ChatScreen() {
           ],
           characterId: selectedChar.id,
           mode,
+          responseLength,
           memory: memoryContext,
           systemPrompt: (selectedChar as any).isCustom ? selectedChar.systemPrompt : undefined,
         },
@@ -330,7 +335,7 @@ export default function ChatScreen() {
         }
       );
     },
-    [isStreaming, messages, chatMode, selectedChar, mode]
+    [isStreaming, messages, chatMode, selectedChar, mode, responseLength]
   );
 
   const reversedMessages = [...messages].reverse();
@@ -607,6 +612,11 @@ export default function ChatScreen() {
       </LinearGradient>
 
       <ModeSelector selected={mode} onSelect={setMode} />
+      <LengthSelector
+        selected={responseLength}
+        onSelect={setResponseLength}
+        accentColor={accentColor}
+      />
 
       <FlatList
         data={reversedMessages}
