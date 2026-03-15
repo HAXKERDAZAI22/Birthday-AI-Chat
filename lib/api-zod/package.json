@@ -7,6 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "drizzle-orm": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.9"
   }
 }
