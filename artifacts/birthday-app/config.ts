@@ -1,5 +1,5 @@
 // Change back to 2026-05-23 for production
-export const UNLOCK_DATE = new Date("2024-01-01T00:00:00"); // Set in the past for testing
+export const UNLOCK_DATE = new Date("2026-05-23T00:00:00"); // Set in the past for testing
 
 export const MOTIVATIONAL_MESSAGES = [
   { text: "Great things take time, your surprise is worth the wait!", icon: "star" },
