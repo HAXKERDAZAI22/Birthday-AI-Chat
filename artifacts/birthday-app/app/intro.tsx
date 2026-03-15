@@ -3,9 +3,10 @@ import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  Easing,
   Platform,
   Pressable,
   ScrollView,
@@ -79,14 +80,13 @@ function ImageStep({ onNext }: { onNext: () => void }) {
           />
         </View>
         <View style={styles.welcomeText}>
-          <Text style={styles.welcomeTitle}>A Gift Just For You</Text>
+          <Text style={styles.welcomeTitle}>هدية خاصة لكِ</Text>
           <Text style={styles.welcomeSub}>
-            Something beautiful has been waiting for this moment
+            شيء جميل كان ينتظر هذه اللحظة
           </Text>
         </View>
       </View>
-
-      <NextButton label="Next" onPress={onNext} />
+      <NextButton label="التالي" onPress={onNext} />
     </View>
   );
 }
@@ -97,27 +97,123 @@ function VideoStep({ onNext }: { onNext: () => void }) {
     p.muted = false;
     p.play();
   });
+  const [videoError, setVideoError] = useState(false);
+
+  useEffect(() => {
+    const sub = player.addListener("statusChange" as any, (status: any) => {
+      if (status?.error) setVideoError(true);
+    });
+    return () => sub?.remove?.();
+  }, [player]);
 
   return (
     <View style={styles.stepContainer}>
       <View style={styles.videoSection}>
         <View style={styles.videoWrapper}>
-          <VideoView
-            player={player}
-            style={styles.video}
-            contentFit="cover"
-            nativeControls={false}
-            allowsFullscreen={false}
-            allowsPictureInPicture={false}
-          />
+          {!videoError ? (
+            Platform.OS === "web" ? (
+              <WebVideo onError={() => setVideoError(true)} />
+            ) : (
+              <VideoView
+                player={player}
+                style={styles.video}
+                contentFit="cover"
+                nativeControls={false}
+                allowsFullscreen={false}
+                allowsPictureInPicture={false}
+              />
+            )
+          ) : (
+            <AnimatedHeartPlaceholder />
+          )}
           <LinearGradient
             colors={["transparent", `${COLORS.bgDeep}77`, COLORS.bgDeep]}
             style={styles.videoOverlay}
           />
         </View>
       </View>
-
       <NextButton label="التالي" onPress={onNext} />
+    </View>
+  );
+}
+
+function WebVideo({ onError }: { onError: () => void }) {
+  const videoRef = useRef<any>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el) {
+      el.play().catch(() => onError());
+    }
+  }, []);
+
+  if (Platform.OS !== "web") return null;
+
+  return (
+    // @ts-ignore
+    <video
+      ref={videoRef}
+      src={"/assets/videos/intro.mp4"}
+      autoPlay
+      loop
+      playsInline
+      muted={false}
+      onError={onError}
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+      }}
+    />
+  );
+}
+
+function AnimatedHeartPlaceholder() {
+  const scale1 = useRef(new Animated.Value(1)).current;
+  const scale2 = useRef(new Animated.Value(0.7)).current;
+  const scale3 = useRef(new Animated.Value(0.4)).current;
+  const opacity = useRef(new Animated.Value(0.6)).current;
+
+  useEffect(() => {
+    const pulse = (anim: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(anim, {
+            toValue: 1.3,
+            duration: 1000,
+            delay,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.ease),
+          }),
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.ease),
+          }),
+        ])
+      );
+    pulse(scale1, 0).start();
+    pulse(scale2, 300).start();
+    pulse(scale3, 600).start();
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1, duration: 800, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <View style={styles.placeholderContainer}>
+      <Animated.View style={[styles.heartRing3, { transform: [{ scale: scale3 }] }]} />
+      <Animated.View style={[styles.heartRing2, { transform: [{ scale: scale2 }] }]} />
+      <Animated.View style={[styles.heartRing1, { transform: [{ scale: scale1 }] }]}>
+        <Animated.View style={{ opacity }}>
+          <Ionicons name="heart" size={64} color={COLORS.accent} />
+        </Animated.View>
+      </Animated.View>
+      <Text style={styles.placeholderText}>لكِ بكل المحبة 🌸</Text>
     </View>
   );
 }
@@ -146,7 +242,7 @@ function LetterStep({ onNext }: { onNext: () => void }) {
         </View>
       </ScrollView>
 
-      <NextButton label="ابدأي المغامرة" onPress={onNext} />
+      <NextButton label="ابدئي المغامرة" onPress={onNext} />
     </View>
   );
 }
@@ -245,6 +341,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 20,
     elevation: 16,
+    backgroundColor: COLORS.bgCard,
   },
   video: {
     flex: 1,
@@ -255,6 +352,44 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 80,
+  },
+  placeholderContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heartRing1: {
+    position: "absolute",
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: `${COLORS.accent}12`,
+    borderWidth: 1.5,
+    borderColor: `${COLORS.accent}55`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heartRing2: {
+    position: "absolute",
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    borderWidth: 1,
+    borderColor: `${COLORS.accent}30`,
+  },
+  heartRing3: {
+    position: "absolute",
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    borderWidth: 1,
+    borderColor: `${COLORS.accent}18`,
+  },
+  placeholderText: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 18,
+    color: COLORS.textSecondary,
+    marginTop: 110,
   },
   letterHeader: {
     alignItems: "center",
