@@ -263,6 +263,7 @@ export default function ChatScreen() {
           characterId: selectedChar.id,
           mode,
           memory: memoryContext,
+          systemPrompt: (selectedChar as any).isCustom ? selectedChar.systemPrompt : undefined,
         },
         (chunk, _characterId) => {
           fullContent += chunk;

@@ -16,6 +16,7 @@ export interface ChatRequest {
   memory?: string;
   isGroup?: boolean;
   characters?: string[];
+  systemPrompt?: string;
 }
 
 export type ConversationMode = "romantic" | "caring" | "funny" | "mixed";
